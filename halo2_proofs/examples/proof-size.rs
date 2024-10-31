@@ -93,7 +93,7 @@ fn main() {
     let circuit = TestCircuit {};
 
     let model = from_circuit_to_model_circuit::<_, _, 56, 56>(
-        K,
+        Some(K),
         &circuit,
         vec![],
         CommitmentScheme::KZGGWC,
