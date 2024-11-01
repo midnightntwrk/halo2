@@ -24,7 +24,9 @@ use crate::{
 use halo2_middleware::circuit::{
     Any, ColumnMid, CompiledCircuit, ConstraintSystemMid, ExpressionMid, VarMid,
 };
+use halo2_middleware::multicore::ParallelIterator;
 use halo2_middleware::{lookup, poly::Rotation, shuffle};
+use rayon::iter::IntoParallelRefIterator;
 use std::collections::HashMap;
 
 /// Creates a domain, constraint system, and configuration for a circuit.
@@ -107,19 +109,17 @@ where
     }
 
     // Compute fixeds
-
     let fixed_polys: Vec<_> = circuit
         .preprocessing
         .fixed
-        .iter()
+        .par_iter()
         .map(|poly| {
             vk.domain
                 .lagrange_to_coeff(Polynomial::new_lagrange_from_vec(poly.clone()))
         })
         .collect();
-
     let fixed_cosets = fixed_polys
-        .iter()
+        .par_iter()
         .map(|poly| vk.domain.coeff_to_extended(poly.clone()))
         .collect();
 
