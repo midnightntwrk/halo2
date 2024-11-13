@@ -291,17 +291,17 @@ fn run_mock_prover_with_fallback<F: Ord + Field + FromUniformBytes<64>, C: Circu
             }))
             .ok()
         })
-        .expect("No valid prover found within the range")
+        .expect("A circuit which can be implemented with at most 2^24 rows.")
 }
 
-/// Given a Plonk circuit, this function returns [CostOptions]. If no upper bound for `k` is
-/// provided, the function iterates until a valid `k` is found. This might delay computation.
+/// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
+/// provided, we iterate until a valid `k` is found (this might delay the computation).
 pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
     k_upper_bound: Option<u32>,
     circuit: &C,
     instances: Vec<Vec<F>>,
 ) -> CostOptions {
-    let instance_len = instances.first().map_or(0, Vec::len);
+    let instance_len = instances.iter().map(Vec::len).max().unwrap_or(0);
 
     let prover = if let Some(k) = k_upper_bound {
         MockProver::run(k, circuit, instances).unwrap()
