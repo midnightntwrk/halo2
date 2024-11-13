@@ -394,6 +394,10 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
     .max()
     .unwrap();
 
+    if min_k == instance_len {
+        println!("WARNING: The dominant factor in your circuit's size is the number of public inputs, which causes the verifier to perform linear work.");
+    }
+
     CostOptions {
         advice,
         instance,
