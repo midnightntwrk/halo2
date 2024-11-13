@@ -1,6 +1,9 @@
 use group::Curve;
 use halo2_middleware::ff::{Field, PrimeField};
+use halo2_middleware::multicore::IndexedParallelIterator;
+use halo2_middleware::multicore::ParallelIterator;
 use halo2_middleware::zal::impls::H2cEngine;
+use rayon::iter::IntoParallelRefMutIterator;
 
 use super::{Argument, ProvingKey, VerifyingKey};
 use crate::{
@@ -173,35 +176,40 @@ pub(crate) fn build_pk<C: CurveAffine, P: Params<C>>(
     let mut permutations = vec![domain.empty_lagrange(); p.columns.len()];
     {
         parallelize(&mut permutations, |o, start| {
-            for (x, permutation_poly) in o.iter_mut().enumerate() {
-                let i = start + x;
-                for (j, p) in permutation_poly.iter_mut().enumerate() {
-                    let (permuted_i, permuted_j) = mapping(i, j);
-                    *p = deltaomega[permuted_i][permuted_j];
-                }
-            }
+            o.par_iter_mut()
+                .enumerate()
+                .for_each(|(x, permutation_poly)| {
+                    let i = start + x;
+                    permutation_poly
+                        .par_iter_mut()
+                        .enumerate()
+                        .for_each(|(j, p)| {
+                            let (permuted_i, permuted_j) = mapping(i, j);
+                            *p = deltaomega[permuted_i][permuted_j];
+                        })
+                })
         });
     }
 
     let mut polys = vec![domain.empty_coeff(); p.columns.len()];
     {
         parallelize(&mut polys, |o, start| {
-            for (x, poly) in o.iter_mut().enumerate() {
+            o.par_iter_mut().enumerate().for_each(|(x, poly)| {
                 let i = start + x;
                 let permutation_poly = permutations[i].clone();
                 *poly = domain.lagrange_to_coeff(permutation_poly);
-            }
+            })
         });
     }
 
     let mut cosets = vec![domain.empty_extended(); p.columns.len()];
     {
         parallelize(&mut cosets, |o, start| {
-            for (x, coset) in o.iter_mut().enumerate() {
+            o.par_iter_mut().enumerate().for_each(|(x, coset)| {
                 let i = start + x;
                 let poly = polys[i].clone();
                 *coset = domain.coeff_to_extended(poly);
-            }
+            })
         });
     }
 
