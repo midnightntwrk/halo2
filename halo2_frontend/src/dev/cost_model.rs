@@ -2,7 +2,8 @@
 //! verification cost, as well as resulting proof size.
 
 use std::collections::HashSet;
-use std::{iter, num::ParseIntError, str::FromStr};
+use std::panic::AssertUnwindSafe;
+use std::{iter, num::ParseIntError, panic, str::FromStr};
 
 use crate::plonk::Circuit;
 use halo2_middleware::ff::{Field, FromUniformBytes};
@@ -49,8 +50,8 @@ pub struct CostOptions {
     /// A shuffle over N columns with max input degree I and max shuffle degree T. May be repeated.
     pub shuffle: Vec<Shuffle>,
 
-    /// 2^K bound on the number of rows.
-    pub k: usize,
+    /// 2^K bound on the number of rows, accounting for ZK, PIs and Lookup tables.
+    pub min_k: usize,
 
     /// Rows count, not including table rows and not accounting for compression
     /// (where multiple regions can use the same rows).
@@ -220,7 +221,7 @@ impl CostOptions {
                 // - inner product argument (k rounds * 2 * COMM bytes)
                 // - a (SCALAR bytes)
                 // - xi (SCALAR bytes)
-                comp_bytes(1 + 2 * self.k, 2)
+                comp_bytes(1 + 2 * self.min_k, 2)
             }
             CommitmentScheme::KZGGWC => {
                 let mut nr_rotations = HashSet::new();
@@ -248,7 +249,7 @@ impl CostOptions {
         let size = plonk + vanishing + multiopen + polycomm;
 
         ModelCircuit {
-            k: self.k,
+            k: self.min_k,
             rows: self.rows_count,
             table_rows: self.table_rows_count,
             max_deg: self.max_degree,
@@ -270,7 +271,7 @@ pub fn from_circuit_to_model_circuit<
     const COMM: usize,
     const SCALAR: usize,
 >(
-    k: u32,
+    k: Option<u32>,
     circuit: &C,
     instances: Vec<Vec<F>>,
     comm_scheme: CommitmentScheme,
@@ -279,13 +280,35 @@ pub fn from_circuit_to_model_circuit<
     options.into_model_circuit::<COMM, SCALAR>(comm_scheme)
 }
 
-/// Given a Plonk circuit, this function returns [CostOptions]
+fn run_mock_prover_with_fallback<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
+    circuit: &C,
+    instances: Vec<Vec<F>>,
+) -> MockProver<F> {
+    (5..25)
+        .find_map(|k| {
+            panic::catch_unwind(AssertUnwindSafe(|| {
+                MockProver::run(k, circuit, instances.clone()).unwrap()
+            }))
+            .ok()
+        })
+        .expect("A circuit which can be implemented with at most 2^24 rows.")
+}
+
+/// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
+/// provided, we iterate until a valid `k` is found (this might delay the computation).
 pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
-    k: u32,
+    k_upper_bound: Option<u32>,
     circuit: &C,
     instances: Vec<Vec<F>>,
 ) -> CostOptions {
-    let prover = MockProver::run(k, circuit, instances).unwrap();
+    let instance_len = instances.iter().map(Vec::len).max().unwrap_or(0);
+
+    let prover = if let Some(k) = k_upper_bound {
+        MockProver::run(k, circuit, instances).unwrap()
+    } else {
+        run_mock_prover_with_fallback(circuit, instances.clone())
+    };
+
     let cs = prover.cs;
 
     let fixed = {
@@ -362,7 +385,18 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         (rows_count, table_rows_count, compressed_rows_count)
     };
 
-    let k = prover.k.try_into().unwrap();
+    let min_k = [
+        rows_count + cs.blinding_factors(),
+        table_rows_count + cs.blinding_factors(),
+        instance_len,
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+
+    if min_k == instance_len {
+        println!("WARNING: The dominant factor in your circuit's size is the number of public inputs, which causes the verifier to perform linear work.");
+    }
 
     CostOptions {
         advice,
@@ -373,7 +407,7 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         lookup,
         permutation,
         shuffle,
-        k,
+        min_k,
         rows_count,
         table_rows_count,
         compressed_rows_count,
