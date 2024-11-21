@@ -254,6 +254,16 @@ pub(crate) fn powers<F: Field>(base: F) -> impl Iterator<Item = F> {
     std::iter::successors(Some(F::ONE), move |power| Some(base * power))
 }
 
+pub(crate) fn truncated_powers<F: PrimeField>(base: F) -> impl Iterator<Item = F> {
+    powers(base).map(|power| {
+        let nb_bytes = F::NUM_BITS.div_ceil(8).div_ceil(2) as usize;
+        let bytes = power.to_repr().as_ref()[..nb_bytes].to_vec();
+        let bi = BigUint::from_bytes_le(&bytes);
+        F::from_str_vartime(&BigUint::to_string(&bi)).unwrap()
+    })
+}
+use num_bigint::BigUint;
+
 #[cfg(test)]
 use rand_core::OsRng;
 

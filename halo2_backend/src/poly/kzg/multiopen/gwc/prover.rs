@@ -1,5 +1,5 @@
 use super::{construct_intermediate_sets, ChallengeV, Query};
-use crate::arithmetic::{kate_division, powers};
+use crate::arithmetic::{kate_division, powers, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::ParamsProver;
 use crate::poly::commitment::Prover;
@@ -62,7 +62,7 @@ where
             let (poly_batch, eval_batch) = commitment_at_a_point
                 .queries
                 .iter()
-                .zip(powers(*v))
+                .zip(truncated_powers(*v))
                 .map(|(query, power_of_v)| {
                     assert_eq!(query.get_point(), z);
 
