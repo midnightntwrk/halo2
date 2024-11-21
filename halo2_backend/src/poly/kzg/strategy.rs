@@ -84,6 +84,25 @@ where
             params: params.clone(),
         }
     }
+
+    #[allow(clippy::type_complexity)]
+    /// Extracts both sides of the dual MSM accumulator without evaluating them.
+    /// Each resulting side is given by a vector of base-scalar pairs.
+    pub fn extract_acc_without_evaluation(
+        &self,
+    ) -> (
+        Vec<(<E as Engine>::G1, <E as Engine>::Fr)>,
+        Vec<(<E as Engine>::G1, <E as Engine>::Fr)>,
+    ) {
+        let acc = self.msm_accumulator.clone();
+        let left: Vec<_> = (acc.left.bases.clone().into_iter())
+            .zip(acc.left.scalars.clone())
+            .collect();
+        let right: Vec<_> = (acc.right.bases.clone().into_iter())
+            .zip(acc.right.scalars.clone())
+            .collect();
+        (left, right)
+    }
 }
 
 /// A verifier that checks a single proof

@@ -230,6 +230,11 @@ impl<C: CurveAffine> VerifyingKey<C> {
         &self.fixed_commitments
     }
 
+    /// Returns the permutation commitments
+    pub fn permutation(&self) -> &permutation::VerifyingKey<C> {
+        &self.permutation
+    }
+
     /// Returns `ConstraintSystem`
     pub(crate) fn cs(&self) -> &ConstraintSystemBack<C::Scalar> {
         &self.cs

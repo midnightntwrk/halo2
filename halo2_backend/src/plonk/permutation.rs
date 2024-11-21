@@ -17,7 +17,7 @@ pub(crate) mod verifier;
 
 /// The verifying key for a single permutation argument.
 #[derive(Clone, Debug)]
-pub(crate) struct VerifyingKey<C: CurveAffine> {
+pub struct VerifyingKey<C: CurveAffine> {
     commitments: Vec<C>,
 }
 
@@ -51,6 +51,11 @@ impl<C: CurveAffine> VerifyingKey<C> {
         C: SerdeCurveAffine,
     {
         self.commitments.len() * C::byte_length(format)
+    }
+
+    /// Returns the commitments of the verifying key.
+    pub fn commitments(&self) -> &Vec<C> {
+        &self.commitments
     }
 }
 
