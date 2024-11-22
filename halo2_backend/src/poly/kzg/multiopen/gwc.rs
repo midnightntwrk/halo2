@@ -168,17 +168,3 @@ where
 
     (commitment_map, point_sets)
 }
-
-//
-// fn count_set_indices<F, T: PartialEq>(commitments: Vec<CommitmentDataZCash<F, T>>) -> HashMap<usize, usize> {
-//     // Create a HashMap to store the count of each set_index
-//     let mut set_index_count = HashMap::new();
-//
-//     // Iterate over the vector of CommitmentDataZCash
-//     for commitment in commitments {
-//         // Increment the count for each set_index
-//         *set_index_count.entry(commitment.set_index).or_insert(0) += 1;
-//     }
-//
-//     set_index_count
-// }

@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use super::{
     commitment::{KZGCommitmentScheme, ParamsVerifierKZG},
     msm::DualMSM,
@@ -10,14 +12,13 @@ use crate::{
         strategy::{Guard, VerificationStrategy},
     },
 };
-use halo2_middleware::ff::Field;
+use ff::Field;
 use halo2_middleware::zal::impls::H2cEngine;
 use halo2curves::{
     pairing::{Engine, MultiMillerLoop},
     CurveAffine, CurveExt,
 };
 use rand_core::OsRng;
-use std::fmt::Debug;
 
 /// Wrapper for linear verification accumulator
 #[derive(Debug, Clone)]
@@ -36,6 +37,7 @@ where
     E::G1Affine: SerdeCurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>,
     E::G1: CurveExt<AffineExt = E::G1Affine>,
     E::G2Affine: SerdeCurveAffine,
+    E::G1: CurveExt<AffineExt = E::G1Affine>,
 {
     type MSMAccumulator = DualMSM<E>;
 }

@@ -1,25 +1,27 @@
 use super::{
     construct_intermediate_sets_zcash, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
 };
-use crate::arithmetic::{eval_polynomial, kate_division, powers, truncate, truncated_powers};
+use crate::arithmetic::{eval_polynomial, kate_division, powers};
+use crate::arithmetic::{truncate, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::Prover;
 use crate::poly::commitment::{ParamsProver, MSM};
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
-use crate::poly::query::ProverQuery;
-use crate::poly::{commitment::Blind, Coeff, Polynomial};
-use crate::transcript::{EncodedChallenge, TranscriptWrite};
-
 use crate::poly::kzg::msm::{DualMSM, MSMKZG};
-use crate::poly::kzg::strategy::GuardKZG;
+use crate::poly::query::ProverQuery;
+use crate::poly::Coeff;
+use crate::poly::{commitment::Blind, Polynomial};
+use crate::transcript::{EncodedChallenge, TranscriptWrite};
 use ff::Field;
+
+use ff::PrimeField;
 use group::Curve;
 use halo2_middleware::zal::traits::MsmAccel;
 use halo2curves::pairing::{Engine, MultiMillerLoop};
 use halo2curves::CurveExt;
 use rand_core::RngCore;
 use std::fmt::Debug;
-use std::io;
+use std::io::{self};
 use std::marker::PhantomData;
 
 /// Concrete KZG prover with GWC variant
@@ -28,7 +30,12 @@ pub struct ProverGWC<'params, E: Engine> {
     params: &'params ParamsKZG<E>,
 }
 
-impl<'params, E: Engine + Debug> ProverGWC<'params, E> {
+impl<'params, E: Engine + Debug> ProverGWC<'params, E>
+where
+    E::Fr: PrimeField,
+    E::G1Affine: SerdeCurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>,
+    E::G1: CurveExt<AffineExt = E::G1Affine>,
+{
     fn inner_product(
         polys: &[Polynomial<E::Fr, Coeff>],
         scalars: impl Iterator<Item = E::Fr>,
@@ -77,6 +84,7 @@ where
     {
         // Refer to the halo2 book for docs:
         // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+
         let x1: ChallengeX1<_> = transcript.squeeze_challenge_scalar();
         let x2: ChallengeX2<_> = transcript.squeeze_challenge_scalar();
 
@@ -92,6 +100,7 @@ where
             .iter()
             .map(|polys| Self::inner_product(polys, truncated_powers(*x1)))
             .collect::<Vec<_>>();
+
         let f_poly = {
             let f_polys = point_sets
                 .iter()
@@ -113,9 +122,12 @@ where
             .params
             .commit(engine, &f_poly, Blind::default())
             .to_affine();
+
         transcript.write_point(f_com)?;
+
         let x3: ChallengeX3<_> = transcript.squeeze_challenge_scalar();
         let x3 = truncate(*x3);
+
         for q_poly in q_polys.iter() {
             transcript.write_scalar(eval_polynomial(q_poly.as_ref(), x3))?;
         }
@@ -127,6 +139,7 @@ where
             polys.push(f_poly);
             Self::inner_product(&polys, truncated_powers(*x4))
         };
+
         let v = eval_polynomial(&final_poly, x3);
 
         let pi = {
@@ -164,9 +177,8 @@ where
         msm_accumulator.right.append_term(v, -g0); // -vG
         msm_accumulator.right.add_msm(&scaled_pi); // zπ
 
-        // TODO: What is this doing here? :thinking_face:? Literally just copying from the commit for no
-        Ok::<_, std::io::Error>(GuardKZG { msm_accumulator })?;
-
+        // FIXME: In the previous implementation we ignore this? :thinking_face:
+        // Ok(GuardKZG { msm_accumulator })
         Ok(())
     }
 }

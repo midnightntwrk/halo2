@@ -1,11 +1,11 @@
-use ff::PrimeField;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use super::{
     construct_intermediate_sets_zcash, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
 };
-use crate::arithmetic::{eval_polynomial, lagrange_interpolate, truncate, truncated_powers};
+use crate::arithmetic::{eval_polynomial, lagrange_interpolate};
+use crate::arithmetic::{truncate, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::Verifier;
 use crate::poly::commitment::MSM;
@@ -16,8 +16,8 @@ use crate::poly::query::{CommitmentReference, VerifierQuery};
 use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
+use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
-use halo2_middleware::ff::Field;
 use halo2curves::pairing::{Engine, MultiMillerLoop};
 use halo2curves::CurveExt;
 
@@ -27,10 +27,7 @@ pub struct VerifierGWC<E: Engine> {
     _marker: PhantomData<E>,
 }
 
-fn msm_inner_product<E>(
-    msms: &[MSMKZG<E>],
-    scalars: impl Iterator<Item = E::Fr>,
-) -> MSMKZG<E>
+fn msm_inner_product<E>(msms: &[MSMKZG<E>], scalars: impl Iterator<Item = E::Fr>) -> MSMKZG<E>
 where
     E: MultiMillerLoop + Debug,
     E::G1Affine: SerdeCurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>,
@@ -47,6 +44,7 @@ where
     }
     res
 }
+
 fn scalars_inner_product<F: PrimeField>(v1: &[F], scalars: impl Iterator<Item = F>) -> F {
     v1.iter()
         .zip(scalars)
@@ -54,6 +52,7 @@ fn scalars_inner_product<F: PrimeField>(v1: &[F], scalars: impl Iterator<Item = 
         .reduce(|acc, s| acc + s)
         .unwrap()
 }
+
 /// Inter produc with truncated powers of the given x.
 fn evals_inner_product<F: PrimeField + Clone>(
     evals_set: &[Vec<F>],
@@ -74,6 +73,7 @@ where
     E::G1Affine: SerdeCurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>,
     E::G1: CurveExt<AffineExt = E::G1Affine>,
     E::G2Affine: SerdeCurveAffine,
+    E::G1: CurveExt<AffineExt = E::G1Affine>,
     E::Fr: Ord,
 {
     type Guard = GuardKZG<E>;
@@ -103,6 +103,7 @@ where
     {
         // Refer to the halo2 book for docs:
         // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+
         let x1: ChallengeX1<_> = transcript.squeeze_challenge_scalar();
         let x2: ChallengeX2<_> = transcript.squeeze_challenge_scalar();
 
@@ -110,6 +111,7 @@ where
 
         let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
         let mut q_eval_sets = vec![vec![]; point_sets.len()];
+
         for com_data in commitment_map.into_iter() {
             let com_data_msm = match com_data.commitment {
                 CommitmentReference::Commitment(c) => {
