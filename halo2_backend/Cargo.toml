@@ -9,7 +9,7 @@ authors = [
     "Privacy Scaling Explorations team",
 ]
 edition = "2021"
-rust-version = "1.66.0"
+rust-version = "1.73.0"
 description = """
 Halo2 backend implementation.  This package implements the halo2 proof system which includes setup (key generation), proving and verifying.
 """
@@ -31,7 +31,7 @@ group = "0.13"
 halo2curves = { version = "0.7.0", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 tracing = "0.1"
-blake2b_simd = "1" # MSRV 1.66.0
+blake2b_simd = "1"
 sha3 = "0.9.1"
 rand_chacha = "0.3"
 serde = { version = "1", optional = true, features = ["derive"] }

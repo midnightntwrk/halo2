@@ -1,16 +1,18 @@
 use super::{
-    construct_intermediate_sets_zcash,
-    ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
+    construct_intermediate_sets_zcash, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
 };
 use crate::arithmetic::{eval_polynomial, kate_division, powers, truncate, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
-use crate::poly::commitment::{MSM, ParamsProver};
 use crate::poly::commitment::Prover;
+use crate::poly::commitment::{ParamsProver, MSM};
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
 use crate::poly::query::ProverQuery;
-use crate::poly::{Coeff, commitment::Blind, Polynomial};
+use crate::poly::{commitment::Blind, Coeff, Polynomial};
 use crate::transcript::{EncodedChallenge, TranscriptWrite};
 
+use crate::poly::kzg::msm::{DualMSM, MSMKZG};
+use crate::poly::kzg::strategy::GuardKZG;
+use ff::Field;
 use group::Curve;
 use halo2_middleware::zal::traits::MsmAccel;
 use halo2curves::pairing::{Engine, MultiMillerLoop};
@@ -19,9 +21,6 @@ use rand_core::RngCore;
 use std::fmt::Debug;
 use std::io;
 use std::marker::PhantomData;
-use ff::Field;
-use crate::poly::kzg::msm::{DualMSM, MSMKZG};
-use crate::poly::kzg::strategy::GuardKZG;
 
 /// Concrete KZG prover with GWC variant
 #[derive(Debug)]
@@ -110,7 +109,10 @@ where
                 .collect::<Vec<_>>();
             Self::inner_product(&f_polys, powers(*x2))
         };
-        let f_com = self.params.commit(engine, &f_poly, Blind::default()).to_affine();
+        let f_com = self
+            .params
+            .commit(engine, &f_poly, Blind::default())
+            .to_affine();
         transcript.write_point(f_com)?;
         let x3: ChallengeX3<_> = transcript.squeeze_challenge_scalar();
         let x3 = truncate(*x3);
@@ -132,7 +134,9 @@ where
                 values: kate_division(&(&final_poly - v).values, x3),
                 _marker: PhantomData,
             };
-            self.params.commit(engine, &pi_poly, Blind::default()).to_affine()
+            self.params
+                .commit(engine, &pi_poly, Blind::default())
+                .to_affine()
         };
 
         transcript.write_point(pi)?;

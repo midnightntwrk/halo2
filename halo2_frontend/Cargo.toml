@@ -9,7 +9,7 @@ authors = [
     "Privacy Scaling Explorations team",
 ]
 edition = "2021"
-rust-version = "1.66.0"
+rust-version = "1.73.0"
 description = """
 Halo2 frontend implementation.  This package implements an API to write circuits, handles witness generation and contains the MockProver.
 """
@@ -30,7 +30,7 @@ ff = "0.13"
 group = "0.13"
 halo2curves = { version = "0.7.0", default-features = false }
 tracing = "0.1"
-blake2b_simd = "1" # MSRV 1.66.0
+blake2b_simd = "1"
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_derive = { version = "1", optional = true}
 halo2_middleware = { path = "../halo2_middleware" }

@@ -2,14 +2,11 @@ mod prover;
 mod verifier;
 
 pub use prover::ProverGWC;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 pub use verifier::VerifierGWC;
 
-use crate::poly::kzg::commitment;
-use crate::poly::{Coeff, Polynomial};
 use crate::{poly::query::Query, transcript::ChallengeScalar};
 use ff::Field;
-use halo2curves::CurveAffine;
 
 // ======================= ZCASH intermediate sets ======================== //
 

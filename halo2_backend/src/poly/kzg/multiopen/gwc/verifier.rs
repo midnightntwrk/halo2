@@ -1,19 +1,17 @@
+use ff::PrimeField;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use ff::PrimeField;
 
 use super::{
-    construct_intermediate_sets_zcash,
-    ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
+    construct_intermediate_sets_zcash, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4,
 };
 use crate::arithmetic::{eval_polynomial, lagrange_interpolate, truncate, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
+use crate::poly::commitment::Verifier;
 use crate::poly::commitment::MSM;
-use crate::poly::commitment::{Verifier};
 use crate::poly::kzg::commitment::KZGCommitmentScheme;
 use crate::poly::kzg::msm::{DualMSM, MSMKZG};
 use crate::poly::kzg::strategy::GuardKZG;
-use crate::poly::query::Query;
 use crate::poly::query::{CommitmentReference, VerifierQuery};
 use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead};
@@ -29,7 +27,7 @@ pub struct VerifierGWC<E: Engine> {
     _marker: PhantomData<E>,
 }
 
-fn msm_inner_product<E: Engine>(
+fn msm_inner_product<E>(
     msms: &[MSMKZG<E>],
     scalars: impl Iterator<Item = E::Fr>,
 ) -> MSMKZG<E>
@@ -69,7 +67,6 @@ fn evals_inner_product<F: PrimeField + Clone>(
     }
     res
 }
-
 
 impl<'params, E> Verifier<'params, KZGCommitmentScheme<E>> for VerifierGWC<E>
 where
@@ -156,10 +153,10 @@ where
             .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
                 let r_poly = lagrange_interpolate(points, evals);
                 let r_eval = eval_polynomial(&r_poly, x3);
-                let eval = points.iter().fold(*proof_eval - &r_eval, |eval, point| {
-                    eval * &(x3 - point).invert().unwrap()
+                let eval = points.iter().fold(*proof_eval - r_eval, |eval, point| {
+                    eval * (x3 - point).invert().unwrap()
                 });
-                acc_eval * &(*x2) + &eval
+                acc_eval * *x2 + eval
             });
 
         let x4: ChallengeX4<_> = transcript.squeeze_challenge_scalar();
