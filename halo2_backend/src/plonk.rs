@@ -13,7 +13,8 @@ use crate::helpers::{
     polynomial_slice_byte_length, read_polynomial_vec, write_polynomial_slice, SerdeCurveAffine,
     SerdeFormat, SerdePrimeField,
 };
-use crate::plonk::circuit::{ConstraintSystemBack, PinnedConstraintSystem};
+pub use crate::plonk::circuit::ConstraintSystemBack;
+use crate::plonk::circuit::{PinnedConstraintSystem};
 use crate::poly::{
     Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, PinnedEvaluationDomain,
     Polynomial,

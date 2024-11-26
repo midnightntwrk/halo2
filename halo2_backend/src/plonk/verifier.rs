@@ -232,17 +232,17 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // [TRANSCRIPT-11]
-    let shuffles_committed = (0..num_proofs)
-        .map(|_| -> Result<Vec<_>, _> {
-            // Hash each shuffle product commitment
-            vk.cs
-                .shuffles
-                .iter()
-                .map(|_argument| shuffle_read_product_commitment(transcript))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // // [TRANSCRIPT-11]
+    // let shuffles_committed = (0..num_proofs)
+    //     .map(|_| -> Result<Vec<_>, _> {
+    //         // Hash each shuffle product commitment
+    //         vk.cs
+    //             .shuffles
+    //             .iter()
+    //             .map(|_argument| shuffle_read_product_commitment(transcript))
+    //             .collect::<Result<Vec<_>, _>>()
+    //     })
+    //     .collect::<Result<Vec<_>, _>>()?;
 
     // 8. Read vanishing argument (before y) ------------------------------------------------------
     // [TRANSCRIPT-12]
@@ -344,16 +344,16 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    // [TRANSCRIPT-23]
-    let shuffles_evaluated = shuffles_committed
-        .into_iter()
-        .map(|shuffles| -> Result<Vec<_>, _> {
-            shuffles
-                .into_iter()
-                .map(|shuffle| shuffle.evaluate(transcript))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // // [TRANSCRIPT-23]
+    // let shuffles_evaluated = shuffles_committed
+    //     .into_iter()
+    //     .map(|shuffles| -> Result<Vec<_>, _> {
+    //         shuffles
+    //             .into_iter()
+    //             .map(|shuffle| shuffle.evaluate(transcript))
+    //             .collect::<Result<Vec<_>, _>>()
+    //     })
+    //     .collect::<Result<Vec<_>, _>>()?;
 
     // This check ensures the circuit is satisfied so long as the polynomial
     // commitments open to the correct values.
@@ -378,9 +378,9 @@ where
             .zip(instance_evals.iter())
             .zip(permutations_evaluated.iter())
             .zip(lookups_evaluated.iter())
-            .zip(shuffles_evaluated.iter())
+            // .zip(shuffles_evaluated.iter())
             .flat_map(
-                |((((advice_evals, instance_evals), permutation), lookups), shuffles)| {
+                |(((advice_evals, instance_evals), permutation), lookups)| {
                     let challenges = &challenges;
                     let fixed_evals = &fixed_evals;
                     std::iter::empty()
@@ -432,22 +432,22 @@ where
                                 )
                             },
                         ))
-                        .chain(shuffles.iter().zip(vk.cs.shuffles.iter()).flat_map(
-                            move |(p, argument)| {
-                                p.expressions(
-                                    l_0,
-                                    l_last,
-                                    l_blind,
-                                    argument,
-                                    theta,
-                                    gamma,
-                                    advice_evals,
-                                    fixed_evals,
-                                    instance_evals,
-                                    challenges,
-                                )
-                            },
-                        ))
+                        // .chain(shuffles.iter().zip(vk.cs.shuffles.iter()).flat_map(
+                        //     move |(p, argument)| {
+                        //         p.expressions(
+                        //             l_0,
+                        //             l_last,
+                        //             l_blind,
+                        //             argument,
+                        //             theta,
+                        //             gamma,
+                        //             advice_evals,
+                        //             fixed_evals,
+                        //             instance_evals,
+                        //             challenges,
+                        //         )
+                        //     },
+                        // ))
                 },
             );
 
@@ -462,8 +462,8 @@ where
         .zip(advice_evals.iter())
         .zip(permutations_evaluated.iter())
         .zip(lookups_evaluated.iter())
-        .zip(shuffles_evaluated.iter())
-        .flat_map(|((((((instance_commitments, instance_evals), advice_commitments),advice_evals),permutation),lookups),shuffles)| {
+        // .zip(shuffles_evaluated.iter())
+        .flat_map(|(((((instance_commitments, instance_evals), advice_commitments),advice_evals),permutation),lookups)| {
                 iter::empty()
                     .chain(
                         V::QUERY_INSTANCE
@@ -490,7 +490,7 @@ where
                     ))
                     .chain(permutation.queries(vk, x))
                     .chain(lookups.iter().flat_map(move |p| p.queries(vk, x)))
-                    .chain(shuffles.iter().flat_map(move |p| p.queries(vk, x)))
+                    // .chain(shuffles.iter().flat_map(move |p| p.queries(vk, x)))
             },
         )
         .chain(

@@ -152,33 +152,6 @@ where
                 .to_affine()
         };
 
-        transcript.write_point(pi)?;
-
-        let final_poly_com = self.params.commit(engine, &final_poly, Blind::default());
-
-        let mut msm_accumulator = DualMSM::new();
-
-        // Scale commitment
-        let mut commitment = MSMKZG::<E>::new();
-        commitment.append_term(E::Fr::ONE, final_poly_com);
-
-        let mut pi_msm = MSMKZG::<E>::new();
-        pi_msm.append_term(E::Fr::ONE, pi.into());
-
-        // Scale zπ
-        let mut scaled_pi = MSMKZG::<E>::new();
-        scaled_pi.append_term(x3, pi.into());
-
-        // (π, C − vG + zπ)
-        msm_accumulator.left.add_msm(&pi_msm);
-
-        msm_accumulator.right.add_msm(&commitment); // C
-        let g0: E::G1 = self.params.g[0].into();
-        msm_accumulator.right.append_term(v, -g0); // -vG
-        msm_accumulator.right.add_msm(&scaled_pi); // zπ
-
-        // FIXME: In the previous implementation we ignore this? :thinking_face:
-        // Ok(GuardKZG { msm_accumulator })
-        Ok(())
+        transcript.write_point(pi)
     }
 }

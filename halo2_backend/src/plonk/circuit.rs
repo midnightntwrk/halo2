@@ -75,13 +75,13 @@ pub struct ConstraintSystemBack<F: Field> {
     pub(crate) challenge_phase: Vec<u8>,
 
     pub(crate) gates: Vec<GateBack<F>>,
-    pub(crate) advice_queries: Vec<(ColumnMid, Rotation)>,
+    pub advice_queries: Vec<(ColumnMid, Rotation)>,
     // Contains an integer for each advice column
     // identifying how many distinct queries it has
     // so far; should be same length as num_advice_columns.
     pub(crate) num_advice_queries: Vec<usize>,
     pub(crate) instance_queries: Vec<(ColumnMid, Rotation)>,
-    pub(crate) fixed_queries: Vec<(ColumnMid, Rotation)>,
+    pub fixed_queries: Vec<(ColumnMid, Rotation)>,
 
     // Permutation argument for performing equality constraints
     pub(crate) permutation: PermutationArgumentBack,
