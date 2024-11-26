@@ -17,6 +17,28 @@ pub struct QueryBack {
     pub(crate) rotation: Rotation,
 }
 
+impl QueryBack {
+    /// Query index
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Column index
+    pub fn column_index(&self) -> usize {
+        self.column_index
+    }
+
+    /// The type of the column
+    pub fn column_type(&self) -> Any {
+        self.column_type
+    }
+
+    /// Rotation of this query
+    pub fn rotation(&self) -> Rotation {
+        self.rotation
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VarBack {
     /// This is a generic column query
@@ -51,11 +73,11 @@ impl Variable for VarBack {
     }
 }
 
-pub(crate) type ExpressionBack<F> = Expression<F, VarBack>;
+pub type ExpressionBack<F> = Expression<F, VarBack>;
 pub(crate) type GateBack<F> = Gate<F, VarBack>;
 pub(crate) type LookupArgumentBack<F> = lookup::Argument<F, VarBack>;
 pub(crate) type ShuffleArgumentBack<F> = shuffle::Argument<F, VarBack>;
-pub(crate) type PermutationArgumentBack = ArgumentMid;
+pub type PermutationArgumentBack = ArgumentMid;
 
 /// This is a description of the circuit environment, such as the gate, column and permutation
 /// arrangements.  This type is internal to the backend and will appear in the verifying key.
@@ -103,7 +125,7 @@ pub struct ConstraintSystemBack<F: Field> {
 impl<F: Field> ConstraintSystemBack<F> {
     /// Compute the degree of the constraint system (the maximum degree of all
     /// constraints).
-    pub(crate) fn degree(&self) -> usize {
+    pub fn degree(&self) -> usize {
         // The permutation argument will serve alongside the gates, so must be
         // accounted for.
         let mut degree = permutation_argument_required_degree();
@@ -146,7 +168,7 @@ impl<F: Field> ConstraintSystemBack<F> {
 
     /// Compute the number of blinding factors necessary to perfectly blind
     /// each of the prover's witness polynomials.
-    pub(crate) fn blinding_factors(&self) -> usize {
+    pub fn blinding_factors(&self) -> usize {
         // All of the prover's advice columns are evaluated at no more than
         let factors = *self.num_advice_queries.iter().max().unwrap_or(&1);
         // distinct points during gate checks.
@@ -200,7 +222,7 @@ impl<F: Field> ConstraintSystemBack<F> {
     }
 
     /// Returns the list of phases
-    pub(crate) fn phases(&self) -> impl Iterator<Item = u8> {
+    pub fn phases(&self) -> impl Iterator<Item = u8> {
         let max_phase = self
             .advice_column_phase
             .iter()
@@ -208,6 +230,37 @@ impl<F: Field> ConstraintSystemBack<F> {
             .copied()
             .unwrap_or_default();
         0..=max_phase
+    }
+
+    /// Number of fixed columns
+    pub fn num_fixed_columns(&self) -> usize {
+        self.num_fixed_columns
+    }
+    /// Number of advice columns
+    pub fn num_advice_columns(&self) -> usize {
+        self.num_advice_columns
+    }
+    /// Number of instance columns
+    pub fn num_instance_columns(&self) -> usize {
+        self.num_instance_columns
+    }
+    /// Return gates of the constraint system
+    pub fn gates(&self) -> &Vec<GateBack<F>> {
+        &self.gates
+    }
+    /// Returns the instance queries
+    pub fn instance_queries(&self) -> &Vec<(ColumnMid, Rotation)> {
+        &self.instance_queries
+    }
+    // Permutation argument for performing equality constraints
+    pub fn permutation(&self) -> &PermutationArgumentBack {
+        &self.permutation
+    }
+
+    // Vector of lookup arguments, where each corresponds to a sequence of
+    // input expressions and a sequence of table expressions involved in the lookup.
+    pub fn lookups(&self) -> &Vec<LookupArgumentBack<F>> {
+        &self.lookups
     }
 
     /// Obtain a pinned version of this constraint system; a structure with the

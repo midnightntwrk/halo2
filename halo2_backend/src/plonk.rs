@@ -14,12 +14,13 @@ use crate::helpers::{
     SerdeFormat, SerdePrimeField,
 };
 pub use crate::plonk::circuit::ConstraintSystemBack;
-use crate::plonk::circuit::{PinnedConstraintSystem};
+use crate::plonk::circuit::PinnedConstraintSystem;
 use crate::poly::{
     Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, PinnedEvaluationDomain,
     Polynomial,
 };
 use crate::transcript::{ChallengeScalar, EncodedChallenge, Transcript};
+pub use circuit::{ExpressionBack, VarBack};
 pub(crate) use evaluation::Evaluator;
 
 use std::io;

@@ -4,10 +4,9 @@ use super::{
 use crate::arithmetic::{eval_polynomial, kate_division, powers};
 use crate::arithmetic::{truncate, truncated_powers};
 use crate::helpers::SerdeCurveAffine;
+use crate::poly::commitment::ParamsProver;
 use crate::poly::commitment::Prover;
-use crate::poly::commitment::{ParamsProver, MSM};
 use crate::poly::kzg::commitment::{KZGCommitmentScheme, ParamsKZG};
-use crate::poly::kzg::msm::{DualMSM, MSMKZG};
 use crate::poly::query::ProverQuery;
 use crate::poly::Coeff;
 use crate::poly::{commitment::Blind, Polynomial};
