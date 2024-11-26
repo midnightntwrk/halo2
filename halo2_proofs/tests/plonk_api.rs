@@ -601,7 +601,7 @@ fn plonk_api() {
 
                 proof
             },
-            "f87ba1010dede5a2148ed94403ca12a566d3154ebb12ccb6c20a330e9b280af8",
+            "d9c2fa0fa42f7ce1f156647069cf20f41ef01f783640410098aef91bc47d7da4",
         );
     }
 
