@@ -282,10 +282,9 @@ pub fn from_circuit_to_model_circuit<
 
 pub fn compute_min_k<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
     // TODO: We could optimize the order here.
-    let (_, _, cs) = (5..25)
-        .find_map(|k| compile_circuit(k, circuit, false).ok())
-        .expect("A circuit which can be implemented with at most 2^24 rows.");
-    cs.degree() as u32
+    (5..25)
+        .find(|k| compile_circuit(*k, circuit, false).is_ok())
+        .expect("A circuit which can be implemented with at most 2^24 rows.")
 }
 
 /// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
