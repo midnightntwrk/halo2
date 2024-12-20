@@ -11,16 +11,8 @@ use std::io::{self, Cursor};
 /// Prefix to a prover's message soliciting a challenge
 const BLAKE2B_PREFIX_CHALLENGE: u8 = 0;
 
-// TODO: BEFORE WE HAD DIFFERENT PREFIXES FOR DIFFERENT TYPES
 /// Prefix to a prover's message
 const BLAKE2B_PREFIX_COMMON: u8 = 1;
-
-/*
-/// NOTE /////
-Why do we need the below three traits? The reason is that we cannot implement
-Into<Transcript::HashInput> for an arbitrary type due to the orphan rule. This
-means that we need to have a trait for something that is hashable.
- */
 
 /// Hash function that can be used for transcript
 pub trait TranscriptHash {

@@ -23,7 +23,6 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     fn commit(params: &Self::Parameters, polynomial: &Polynomial<F, Coeff>) -> Self::Commitment;
 
     /// Create an opening proof at a specific query
-    /// FIXME: We are not writing the queries to the transcript
     fn open<'com, T: Transcript, I>(
         params: &Self::Parameters,
         prover_query: I,
