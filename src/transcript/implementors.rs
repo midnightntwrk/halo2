@@ -2,7 +2,7 @@ use crate::transcript::{
     Hashable, Sampleable, TranscriptHash, BLAKE2B_PREFIX_CHALLENGE, BLAKE2B_PREFIX_COMMON,
 };
 use blake2b_simd::{Params, State as Blake2bState};
-use ff::FromUniformBytes;
+use ff::{FromUniformBytes, PrimeField};
 use group::GroupEncoding;
 use halo2curves::bn256::{Fr, G1Affine};
 
@@ -50,5 +50,51 @@ impl Sampleable<Blake2bState> for Fr {
         let mut bytes = [0u8; 64];
         bytes[..out.len()].copy_from_slice(&out);
         Fr::from_uniform_bytes(&bytes)
+    }
+}
+
+//////////////////////////////////////////////////////////
+/// Implementation of Hashable for BLS12-381 with Blake //
+//////////////////////////////////////////////////////////
+
+impl Hashable<Blake2bState> for blstrs::G1Affine {
+    fn to_input(&self) -> Vec<u8> {
+        self.to_bytes().as_ref().to_vec()
+    }
+}
+
+impl Hashable<Blake2bState> for blstrs::Scalar {
+    fn to_input(&self) -> Vec<u8> {
+        self.to_repr().to_vec()
+    }
+}
+
+impl Sampleable<Blake2bState> for blstrs::Scalar {
+    fn sample(out: Vec<u8>) -> Self {
+        assert!(out.len() <= 64);
+        let mut bytes = [0u8; 64];
+        bytes[..out.len()].copy_from_slice(&out);
+        blstrs::Scalar::from_uniform_bytes(&bytes)
+    }
+}
+
+impl Hashable<Blake2bState> for halo2curves::bls12381::G1Affine {
+    fn to_input(&self) -> Vec<u8> {
+        self.to_bytes().as_ref().to_vec()
+    }
+}
+
+impl Hashable<Blake2bState> for halo2curves::bls12381::Fr {
+    fn to_input(&self) -> Vec<u8> {
+        self.to_repr().as_ref().to_vec()
+    }
+}
+
+impl Sampleable<Blake2bState> for halo2curves::bls12381::Fr {
+    fn sample(out: Vec<u8>) -> Self {
+        assert!(out.len() <= 64);
+        let mut bytes = [0u8; 64];
+        bytes[..out.len()].copy_from_slice(&out);
+        halo2curves::bls12381::Fr::from_uniform_bytes(&bytes)
     }
 }

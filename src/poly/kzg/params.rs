@@ -30,6 +30,13 @@ impl<E: Engine> Params for ParamsKZG<E> {
 }
 
 impl<E: Engine + Debug> ParamsKZG<E> {
+    /// Downsize the current parameters to match a smaller `k`.
+    pub fn downsize(&mut self, new_k: u32) {
+        assert!(new_k < self.g_lagrange.len() as u32);
+        self.g.truncate(new_k as usize);
+        self.g_lagrange = g_to_lagrange(self.g.iter().map(|g| g.to_curve()).collect(), new_k);
+    }
+
     /// Initializes parameters for the curve, draws toxic secret from given rng.
     /// MUST NOT be used in production.
     pub fn unsafe_setup<R: RngCore>(k: u32, rng: R) -> Self {
