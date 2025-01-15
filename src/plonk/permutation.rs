@@ -23,7 +23,7 @@ use std::io;
 #[derive(Debug, Clone)]
 pub struct Argument {
     /// A sequence of columns involved in the argument.
-    pub(super) columns: Vec<Column<Any>>,
+    pub columns: Vec<Column<Any>>,
 }
 
 impl Argument {
@@ -88,7 +88,7 @@ pub struct VerifyingKey<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
 }
 
 impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
-    /// Returns commitments of sigma polynomials
+    /// Returns the commitments of the verifying key.
     pub fn commitments(&self) -> &Vec<CS::Commitment> {
         &self.commitments
     }

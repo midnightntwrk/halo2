@@ -43,7 +43,7 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     ) -> Result<(), Error>
     where
         I: IntoIterator<Item = ProverQuery<'com, F>> + Clone,
-        F: Sampleable<T::Hash>,
+        F: Sampleable<T::Hash> + Ord + Hashable<<T as Transcript>::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 
     /// Verify an opening proof at a given query
@@ -53,7 +53,7 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     ) -> Result<Self::VerificationGuard, Error>
     where
         I: IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
-        F: Sampleable<T::Hash>,
+        F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 }
 

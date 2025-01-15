@@ -40,7 +40,7 @@ pub enum Error {
 pub trait Basis: Copy + Debug + Send + Sync {}
 
 /// The polynomial is defined as coefficients
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Coeff;
 impl Basis for Coeff {}
 
@@ -57,7 +57,7 @@ impl Basis for ExtendedLagrangeCoeff {}
 
 /// Represents a univariate polynomial defined over a field and a particular
 /// basis.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Polynomial<F, B> {
     pub(crate) values: Vec<F>,
     pub(crate) _marker: PhantomData<B>,

@@ -5,20 +5,24 @@ use std::marker::PhantomData;
 pub mod msm;
 /// KZG commitment scheme
 pub mod params;
+mod utils;
 
 use std::fmt::Debug;
 
 use crate::poly::kzg::msm::{DualMSM, MSMKZG};
 use crate::poly::kzg::params::{ParamsKZG, ParamsVerifierKZG};
-use crate::poly::query::Query;
 use crate::poly::query::VerifierQuery;
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery};
-use crate::utils::arithmetic::{kate_division, powers, MSM};
+use crate::utils::arithmetic::{
+    eval_polynomial, kate_division, lagrange_interpolate, powers, truncate, truncated_powers, MSM,
+};
 
-use crate::poly::commitment::PolynomialCommitmentScheme;
+use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
+use crate::poly::kzg::utils::{
+    construct_intermediate_sets, evals_inner_product, msm_inner_product, scalars_inner_product,
+};
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use ff::Field;
-use group::prime::PrimeCurveAffine;
 use group::Group;
 use halo2curves::msm::msm_best;
 use halo2curves::pairing::MultiMillerLoop;
@@ -30,6 +34,20 @@ use rand_core::OsRng;
 /// KZG verifier
 pub struct KZGCommitmentScheme<E: Engine> {
     _marker: PhantomData<E>,
+}
+
+impl<E: Engine + Debug> KZGCommitmentScheme<E> {
+    fn inner_product(
+        polys: &[Polynomial<E::Fr, Coeff>],
+        scalars: impl Iterator<Item = E::Fr>,
+    ) -> Polynomial<E::Fr, Coeff> {
+        polys
+            .iter()
+            .zip(scalars)
+            .map(|(p, s)| p.clone() * s)
+            .reduce(|acc, p| acc + &p)
+            .unwrap()
+    }
 }
 
 impl<E: MultiMillerLoop> PolynomialCommitmentScheme<E::Fr> for KZGCommitmentScheme<E>
@@ -81,143 +99,169 @@ where
     ) -> Result<(), Error>
     where
         I: IntoIterator<Item = ProverQuery<'com, E::Fr>> + Clone,
-        E::Fr: Sampleable<T::Hash>,
+        E::Fr: Sampleable<T::Hash> + Ord + Hashable<<T as Transcript>::Hash>,
         E::G1Affine: Hashable<T::Hash>,
     {
-        let v: E::Fr = transcript.squeeze_challenge();
-        let commitment_data = construct_intermediate_sets(prover_query);
+        // Refer to the halo2 book for docs:
+        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+        let x1: E::Fr = transcript.squeeze_challenge();
+        let x2: E::Fr = transcript.squeeze_challenge();
 
-        for commitment_at_a_point in commitment_data.iter() {
-            let z = commitment_at_a_point.point;
-            let (poly_batch, eval_batch) = commitment_at_a_point
-                .queries
+        let (poly_map, point_sets) = construct_intermediate_sets(prover_query);
+
+        let mut q_polys = vec![vec![]; point_sets.len()];
+
+        for com_data in poly_map.iter() {
+            q_polys[com_data.set_index].push(com_data.commitment.poly.clone());
+        }
+
+        let q_polys = q_polys
+            .iter()
+            .map(|polys| Self::inner_product(polys, truncated_powers(x1)))
+            .collect::<Vec<_>>();
+        let f_poly = {
+            let f_polys = point_sets
                 .iter()
-                .zip(powers(v))
-                .map(|(query, power_of_v)| {
-                    assert_eq!(query.get_point(), z);
-
-                    let poly = query.get_commitment().poly;
-                    let eval = query.get_eval();
-
-                    (poly.clone() * power_of_v, eval * power_of_v)
+                .zip(q_polys.clone())
+                .map(|(points, q_poly)| {
+                    let mut poly = points.iter().fold(q_poly.clone().values, |poly, point| {
+                        kate_division(&poly, *point)
+                    });
+                    poly.resize(1 << params.max_k() as usize, E::Fr::ZERO);
+                    Polynomial {
+                        values: poly,
+                        _marker: PhantomData,
+                    }
                 })
-                .reduce(|(poly_acc, eval_acc), (poly, eval)| (poly_acc + &poly, eval_acc + eval))
-                .unwrap();
+                .collect::<Vec<_>>();
+            Self::inner_product(&f_polys, powers(x2))
+        };
+        let f_com = Self::commit(params, &f_poly);
+        transcript.write(&f_com).map_err(|_| Error::OpeningError)?;
+        let x3: E::Fr = transcript.squeeze_challenge();
+        let x3 = truncate(x3);
+        for q_poly in q_polys.iter() {
+            transcript
+                .write(&eval_polynomial(&q_poly.values, x3))
+                .map_err(|_| Error::OpeningError)?;
+        }
 
-            let poly_batch = &poly_batch - eval_batch;
-            let witness_poly = Polynomial {
-                values: kate_division(&poly_batch.values, z),
+        let x4: E::Fr = transcript.squeeze_challenge();
+
+        let final_poly = {
+            let mut polys = q_polys;
+            polys.push(f_poly);
+            Self::inner_product(&polys, truncated_powers(x4))
+        };
+        let v = eval_polynomial(&final_poly, x3);
+        let pi = {
+            let pi_poly = Polynomial {
+                values: kate_division(&(&final_poly - v).values, x3),
                 _marker: PhantomData,
             };
-            let w = Self::commit(params, &witness_poly);
+            Self::commit(params, &pi_poly)
+        };
 
-            transcript.write(&w).map_err(|_| Error::OpeningError)?;
-        }
+        transcript.write(&pi).map_err(|_| Error::OpeningError)?;
 
         Ok(())
     }
 
     fn prepare<T: Transcript, I>(verifier_query: I, transcript: &mut T) -> Result<DualMSM<E>, Error>
     where
-        E::Fr: Sampleable<T::Hash>,
+        E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         E::G1Affine: Hashable<T::Hash>,
         I: IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
     {
-        let v: E::Fr = transcript.squeeze_challenge();
+        // Refer to the halo2 book for docs:
+        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+        let x1: E::Fr = transcript.squeeze_challenge();
+        let x2: E::Fr = transcript.squeeze_challenge();
 
-        let commitment_data = construct_intermediate_sets(verifier_query);
+        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query);
 
-        let w = (0..commitment_data.len())
-            .map(|_| transcript.read().map_err(|_| Error::SamplingError))
-            .collect::<Result<Vec<E::G1Affine>, Error>>()?;
-
-        let u: E::Fr = transcript.squeeze_challenge();
-
-        let mut commitment_multi = MSMKZG::<E>::new();
-        let mut eval_multi = E::Fr::ZERO;
-
-        let mut witness = MSMKZG::<E>::new();
-        let mut witness_with_aux = MSMKZG::<E>::new();
-
-        for ((commitment_at_a_point, wi), power_of_u) in
-            commitment_data.iter().zip(w.into_iter()).zip(powers(u))
-        {
-            assert!(!commitment_at_a_point.queries.is_empty());
-            let z = commitment_at_a_point.point;
-
-            let (mut commitment_batch, eval_batch) = commitment_at_a_point
-                .queries
-                .iter()
-                .zip(powers(v))
-                .map(|(query, power_of_v)| {
-                    assert_eq!(query.get_point(), z);
-
-                    let mut commitment = MSMKZG::<E>::new();
-                    commitment.append_term(power_of_v, query.get_commitment().to_curve());
-
-                    let eval = power_of_v * query.get_eval();
-
-                    (commitment, eval)
-                })
-                .reduce(|(mut commitment_acc, eval_acc), (commitment, eval)| {
-                    commitment_acc.add_msm(&commitment);
-                    (commitment_acc, eval_acc + eval)
-                })
-                .unwrap();
-
-            commitment_batch.scale(power_of_u);
-            commitment_multi.add_msm(&commitment_batch);
-            eval_multi += power_of_u * eval_batch;
-
-            witness_with_aux.append_term(power_of_u * z, wi.to_curve());
-            witness.append_term(power_of_u, wi.to_curve());
+        let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
+        let mut q_eval_sets = vec![vec![]; point_sets.len()];
+        for com_data in commitment_map.into_iter() {
+            let mut msm = MSMKZG::new();
+            msm.append_term(E::Fr::ONE, com_data.commitment.into());
+            q_coms[com_data.set_index].push(msm);
+            q_eval_sets[com_data.set_index].push(com_data.evals);
         }
 
-        let mut msm = DualMSM::new();
-
-        msm.left.add_msm(&witness);
-
-        msm.right.add_msm(&witness_with_aux);
-        msm.right.add_msm(&commitment_multi);
-        let g0 = E::G1::generator();
-        msm.right.append_term(eval_multi, -g0);
-
-        Ok(msm)
-    }
-}
-
-#[derive(Debug)]
-struct CommitmentData<F: Field, Q: Query<F>> {
-    queries: Vec<Q>,
-    point: F,
-    _marker: PhantomData<F>,
-}
-
-fn construct_intermediate_sets<F: Field, I, Q: Query<F>>(queries: I) -> Vec<CommitmentData<F, Q>>
-where
-    I: IntoIterator<Item = Q> + Clone,
-{
-    let mut point_query_map: Vec<(F, Vec<Q>)> = Vec::new();
-    for query in queries {
-        if let Some(pos) = point_query_map
+        let q_coms = q_coms
             .iter()
-            .position(|(point, _)| *point == query.get_point())
-        {
-            let (_, queries) = &mut point_query_map[pos];
-            queries.push(query);
-        } else {
-            point_query_map.push((query.get_point(), vec![query]));
-        }
-    }
+            .map(|msms| msm_inner_product(msms, truncated_powers(x1)))
+            .collect::<Vec<_>>();
+        let q_eval_sets = q_eval_sets
+            .iter()
+            .map(|evals| evals_inner_product(evals, truncated_powers(x1)))
+            .collect::<Vec<_>>();
 
-    point_query_map
-        .into_iter()
-        .map(|(point, queries)| CommitmentData {
-            queries,
-            point,
-            _marker: PhantomData,
-        })
-        .collect()
+        let f_com: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+        // Sample a challenge x_3 for checking that f(X) was committed to
+        // correctly.
+        let x3: E::Fr = transcript.squeeze_challenge();
+        let x3 = truncate(x3);
+
+        let mut q_evals_on_x3 = Vec::<E::Fr>::with_capacity(q_eval_sets.len());
+        for _ in 0..q_eval_sets.len() {
+            q_evals_on_x3.push(transcript.read().map_err(|_| Error::SamplingError)?);
+        }
+
+        // We can compute the expected msm_eval at x_3 using the u provided
+        // by the prover and from x_2
+        let f_eval = point_sets
+            .iter()
+            .zip(q_eval_sets.iter())
+            .zip(q_evals_on_x3.iter())
+            .rev()
+            .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
+                let r_poly = lagrange_interpolate(points, evals);
+                let r_eval = eval_polynomial(&r_poly, x3);
+                let eval = points.iter().fold(*proof_eval - &r_eval, |eval, point| {
+                    eval * &(x3 - point).invert().unwrap()
+                });
+                acc_eval * &(x2) + &eval
+            });
+
+        let x4: E::Fr = transcript.squeeze_challenge();
+
+        let final_com = {
+            let mut polys = q_coms;
+            let mut f_com_as_msm = MSMKZG::new();
+            f_com_as_msm.append_term(E::Fr::ONE, f_com.into());
+            polys.push(f_com_as_msm);
+            msm_inner_product(&polys, truncated_powers(x4))
+        };
+
+        let v = {
+            let mut evals = q_evals_on_x3;
+            evals.push(f_eval);
+            scalars_inner_product(&evals, truncated_powers(x4))
+        };
+
+        let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+
+        let mut pi_msm = MSMKZG::<E>::new();
+        pi_msm.append_term(E::Fr::ONE, pi.into());
+
+        // Scale zπ
+        let mut scaled_pi = MSMKZG::<E>::new();
+        scaled_pi.append_term(x3, pi.into());
+
+        let mut msm_accumulator = DualMSM::new();
+
+        // (π, C − vG + zπ)
+        msm_accumulator.left.add_msm(&pi_msm); // π
+
+        msm_accumulator.right.add_msm(&final_com); // C
+        let g0 = E::G1::generator();
+        msm_accumulator.right.append_term(v, -g0); // -vG
+        msm_accumulator.right.add_msm(&scaled_pi); // zπ
+
+        Ok(msm_accumulator)
+    }
 }
 
 #[cfg(test)]
@@ -249,7 +293,7 @@ mod tests {
         let proof = create_proof::<_, CircuitTranscript<Blake2bState>>(&params);
 
         let verifier_params = params.verifier_params();
-        verify::<_, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], false);
+        verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], false);
 
         verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], true);
     }
@@ -259,7 +303,7 @@ mod tests {
         proof: &[u8],
         should_fail: bool,
     ) where
-        E::Fr: SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash>,
+        E::Fr: SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
         E::G1Affine: CurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>
             + SerdeObject
             + Hashable<T::Hash>,
@@ -305,7 +349,8 @@ mod tests {
 
     fn create_proof<E: MultiMillerLoop, T: Transcript>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
     where
-        E::Fr: WithSmallOrderMulGroup<3> + SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash>,
+        E::Fr:
+            WithSmallOrderMulGroup<3> + SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
         E::G1Affine: SerdeObject
             + Hashable<T::Hash>
             + Default

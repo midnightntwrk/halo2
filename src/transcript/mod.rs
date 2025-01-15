@@ -21,7 +21,7 @@ pub trait TranscriptHash {
     /// Initialise the hasher
     fn init() -> Self;
     /// Absorb an element
-    fn absorb(&mut self, input: &Self::Input) -> &mut Self;
+    fn absorb(&mut self, input: &Self::Input);
     /// Squeeze an output
     fn squeeze(&mut self) -> Self::Output;
 }
@@ -67,11 +67,20 @@ pub trait Transcript {
     fn finalize(self) -> Vec<u8>;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 /// Transcript used in proofs, parametrised by its hash function.
 pub struct CircuitTranscript<H: TranscriptHash> {
     state: H,
     buffer: Cursor<Vec<u8>>,
+}
+
+impl<H: TranscriptHash> CircuitTranscript<H> {
+    /// Returns the buffer for non default reading of the buffer (such as for
+    /// reading an empty proof)
+    /// TODO: SHOULD WE REMOVE THIS AND WRITE A FUNCTION THAT RETURNS THE PROOF SIZE?
+    pub fn buffer(&mut self) -> &mut Cursor<Vec<u8>> {
+        &mut self.buffer
+    }
 }
 
 impl<H: TranscriptHash> Transcript for CircuitTranscript<H> {

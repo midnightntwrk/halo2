@@ -246,6 +246,10 @@ fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit:
 
 /// Generate a `VerifyingKey` from an instance of `Circuit`.
 /// By default, selector compression is turned **off**.
+///
+/// This function automatically generates the VK using the smallest
+/// value of k required for the ConcreteCircuit.
+/// To specify a particular value for k, use keygen_vk_with_k instead.
 pub fn keygen_vk<F, CS, ConcreteCircuit>(
     params: &CS::Parameters,
     circuit: &ConcreteCircuit,
@@ -256,6 +260,22 @@ where
     ConcreteCircuit: Circuit<F>,
 {
     let k = k_from_circuit(circuit);
+
+    keygen_vk_with_k(params, circuit, k)
+}
+
+/// Generate a `VerifyingKey` from an instance of `Circuit`.
+/// By default, selector compression is turned **off**.
+pub fn keygen_vk_with_k<F, CS, ConcreteCircuit>(
+    params: &CS::Parameters,
+    circuit: &ConcreteCircuit,
+    k: u32,
+) -> Result<VerifyingKey<F, CS>, Error>
+where
+    F: WithSmallOrderMulGroup<3> + FromUniformBytes<64> + Ord,
+    CS: PolynomialCommitmentScheme<F>,
+    ConcreteCircuit: Circuit<F>,
+{
     if params.max_k() < k {
         return Err(Error::NotEnoughRowsAvailable {
             current_k: params.max_k(),

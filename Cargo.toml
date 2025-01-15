@@ -43,7 +43,7 @@ backtrace = { version = "0.3", optional = true }
 ff = "0.13"
 group = "0.13"
 halo2curves = { version = "0.7.0", default-features = false }
-blstrs = { git = "https://github.com/davidnevadoc/blstrs", rev = "8ca6da7" }
+blstrs = { git = "https://github.com/davidnevadoc/blstrs", rev = "3dfe5bf" }
 rand_core = { version = "0.6", default-features = false }
 tracing = "0.1"
 blake2b_simd = "1" # MSRV 1.66.0
@@ -59,6 +59,7 @@ tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 
 # Legacy circuit compatibility
 halo2_legacy_pdqsort = { version = "0.1.0", optional = true }
+num-bigint = "0.4.6"
 
 [dev-dependencies]
 assert_matches = "1.5"

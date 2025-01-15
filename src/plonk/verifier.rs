@@ -19,7 +19,8 @@ where
         + Hashable<T::Hash>
         + Sampleable<T::Hash>
         + SerdeObject
-        + FromUniformBytes<64>,
+        + FromUniformBytes<64>
+        + Ord,
     CS::Commitment: Hashable<T::Hash> + SerdeObject,
 {
     // Check that instances matches the expected number of instance columns
@@ -119,6 +120,7 @@ where
     // Sample x challenge, which is used to ensure the circuit is
     // satisfied with high probability.
     let x: F = transcript.squeeze_challenge();
+
     let instance_evals = {
         let xn = x.pow([vk.n()]);
         let (min_rotation, max_rotation) =
@@ -165,7 +167,6 @@ where
         .collect::<Result<Vec<_>, _>>()?;
 
     let fixed_evals = read_n(transcript, vk.cs.fixed_queries.len())?;
-
     let vanishing = vanishing.evaluate_after_x(vk, transcript)?;
 
     let permutations_common = vk.permutation.evaluate(transcript)?;

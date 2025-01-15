@@ -17,9 +17,9 @@ impl TranscriptHash for Blake2bState {
             .to_state()
     }
 
-    fn absorb(&mut self, input: &Self::Input) -> &mut Self {
+    fn absorb(&mut self, input: &Self::Input) {
         self.update(&[BLAKE2B_PREFIX_COMMON]);
-        self.update(input)
+        self.update(input);
     }
 
     fn squeeze(&mut self) -> Self::Output {

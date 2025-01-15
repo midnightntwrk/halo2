@@ -94,6 +94,12 @@ pub struct DualMSM<E: Engine> {
     pub(crate) right: MSMKZG<E>,
 }
 
+/// A [DualMSM] split into left and right vectors of `(Scalar, Point)` tuples
+pub type SplitDualMSM<'a, E> = (
+    Vec<(&'a <E as Engine>::Fr, &'a <E as Engine>::G1)>,
+    Vec<(&'a <E as Engine>::Fr, &'a <E as Engine>::G1)>,
+);
+
 impl<E: MultiMillerLoop + Debug> Default for DualMSM<E>
 where
     E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
@@ -126,6 +132,23 @@ where
             left: MSMKZG::new(),
             right: MSMKZG::new(),
         }
+    }
+
+    /// Split the [DualMSM] into `left` and `right`.
+    pub fn split(&self) -> SplitDualMSM<E> {
+        let left = self
+            .left
+            .scalars
+            .iter()
+            .zip(self.left.bases.iter())
+            .collect();
+        let right = self
+            .right
+            .scalars
+            .iter()
+            .zip(self.right.bases.iter())
+            .collect();
+        (left, right)
     }
 
     /// Scale all scalars in the MSM by some scaling factor
