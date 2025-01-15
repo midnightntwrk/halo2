@@ -33,6 +33,7 @@ impl TranscriptHash for Blake2bState {
 ///////////////////////////////////////////////////
 
 impl Hashable<Blake2bState> for G1Affine {
+    /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         self.to_bytes().as_ref().to_vec()
     }
@@ -45,10 +46,10 @@ impl Hashable<Blake2bState> for Fr {
 }
 
 impl Sampleable<Blake2bState> for Fr {
-    fn sample(out: Vec<u8>) -> Self {
-        assert!(out.len() <= 64);
+    fn sample(hash_output: Vec<u8>) -> Self {
+        assert!(hash_output.len() <= 64);
         let mut bytes = [0u8; 64];
-        bytes[..out.len()].copy_from_slice(&out);
+        bytes[..hash_output.len()].copy_from_slice(&hash_output);
         Fr::from_uniform_bytes(&bytes)
     }
 }
@@ -58,6 +59,7 @@ impl Sampleable<Blake2bState> for Fr {
 //////////////////////////////////////////////////////////
 
 impl Hashable<Blake2bState> for blstrs::G1Affine {
+    /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         self.to_bytes().as_ref().to_vec()
     }
@@ -70,15 +72,17 @@ impl Hashable<Blake2bState> for blstrs::Scalar {
 }
 
 impl Sampleable<Blake2bState> for blstrs::Scalar {
-    fn sample(out: Vec<u8>) -> Self {
-        assert!(out.len() <= 64);
+    fn sample(hash_output: Vec<u8>) -> Self {
+        assert!(hash_output.len() <= 64);
+        assert!(hash_output.len() >= (blstrs::Scalar::NUM_BITS as usize / 8) + 12);
         let mut bytes = [0u8; 64];
-        bytes[..out.len()].copy_from_slice(&out);
+        bytes[..hash_output.len()].copy_from_slice(&hash_output);
         blstrs::Scalar::from_uniform_bytes(&bytes)
     }
 }
 
 impl Hashable<Blake2bState> for halo2curves::bls12381::G1Affine {
+    /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         self.to_bytes().as_ref().to_vec()
     }
@@ -91,10 +95,10 @@ impl Hashable<Blake2bState> for halo2curves::bls12381::Fr {
 }
 
 impl Sampleable<Blake2bState> for halo2curves::bls12381::Fr {
-    fn sample(out: Vec<u8>) -> Self {
-        assert!(out.len() <= 64);
+    fn sample(hash_output: Vec<u8>) -> Self {
+        assert!(hash_output.len() <= 64);
         let mut bytes = [0u8; 64];
-        bytes[..out.len()].copy_from_slice(&out);
+        bytes[..hash_output.len()].copy_from_slice(&hash_output);
         halo2curves::bls12381::Fr::from_uniform_bytes(&bytes)
     }
 }
