@@ -199,9 +199,8 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     }
 }
 
-// This code also appears in `keygen`. We duplicate it here for simplicity of the
-// function body.
-fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
+/// Compute the minimal `k` to compute a circuit.
+pub fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
     // TODO: We could optimize the order here.
     (1..25)
         .find(|k| {

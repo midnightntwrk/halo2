@@ -2,11 +2,10 @@
 //! verification cost, as well as resulting proof size.
 
 use std::collections::HashSet;
-use std::panic::AssertUnwindSafe;
-use std::{iter, num::ParseIntError, panic, str::FromStr};
+use std::{iter, num::ParseIntError, str::FromStr};
 
 use crate::plonk::Any::Fixed;
-use crate::plonk::Circuit;
+use crate::plonk::{k_from_circuit, Circuit};
 use ff::{Field, FromUniformBytes};
 use serde::Deserialize;
 use serde_derive::Serialize;
@@ -264,20 +263,6 @@ pub fn from_circuit_to_model_circuit<
     options.into_model_circuit::<COMM, SCALAR>(comm_scheme)
 }
 
-fn run_mock_prover_with_fallback<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
-    circuit: &C,
-    instances: Vec<Vec<F>>,
-) -> MockProver<F> {
-    (1..25)
-        .find_map(|k| {
-            panic::catch_unwind(AssertUnwindSafe(|| {
-                MockProver::run(k, circuit, instances.clone()).unwrap()
-            }))
-            .ok()
-        })
-        .expect("A circuit which can be implemented with at most 2^24 rows.")
-}
-
 /// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
 /// provided, we iterate until a valid `k` is found (this might delay the computation).
 pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
@@ -289,7 +274,8 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
     let prover = if let Some(k) = k_upper_bound {
         MockProver::run(k, circuit, instances).unwrap()
     } else {
-        run_mock_prover_with_fallback(circuit, instances.clone())
+        let k = k_from_circuit(circuit);
+        MockProver::run(k, circuit, instances).unwrap()
     };
 
     let cs = prover.cs;
