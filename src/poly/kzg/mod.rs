@@ -119,6 +119,7 @@ where
             .iter()
             .map(|polys| Self::inner_product(polys, truncated_powers(x1)))
             .collect::<Vec<_>>();
+
         let f_poly = {
             let f_polys = point_sets
                 .iter()
@@ -136,10 +137,13 @@ where
                 .collect::<Vec<_>>();
             Self::inner_product(&f_polys, powers(x2))
         };
+
         let f_com = Self::commit(params, &f_poly);
         transcript.write(&f_com).map_err(|_| Error::OpeningError)?;
+
         let x3: E::Fr = transcript.squeeze_challenge();
         let x3 = truncate(x3);
+
         for q_poly in q_polys.iter() {
             transcript
                 .write(&eval_polynomial(&q_poly.values, x3))
@@ -154,6 +158,7 @@ where
             Self::inner_product(&polys, truncated_powers(x4))
         };
         let v = eval_polynomial(&final_poly, x3);
+
         let pi = {
             let pi_poly = Polynomial {
                 values: kate_division(&(&final_poly - v).values, x3),
@@ -162,9 +167,7 @@ where
             Self::commit(params, &pi_poly)
         };
 
-        transcript.write(&pi).map_err(|_| Error::OpeningError)?;
-
-        Ok(())
+        transcript.write(&pi).map_err(|_| Error::OpeningError)
     }
 
     fn prepare<T: Transcript, I>(verifier_query: I, transcript: &mut T) -> Result<DualMSM<E>, Error>
@@ -182,6 +185,7 @@ where
 
         let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
         let mut q_eval_sets = vec![vec![]; point_sets.len()];
+
         for com_data in commitment_map.into_iter() {
             let mut msm = MSMKZG::new();
             msm.append_term(E::Fr::ONE, com_data.commitment.into());
@@ -193,12 +197,14 @@ where
             .iter()
             .map(|msms| msm_inner_product(msms, truncated_powers(x1)))
             .collect::<Vec<_>>();
+
         let q_eval_sets = q_eval_sets
             .iter()
             .map(|evals| evals_inner_product(evals, truncated_powers(x1)))
             .collect::<Vec<_>>();
 
         let f_com: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+
         // Sample a challenge x_3 for checking that f(X) was committed to
         // correctly.
         let x3: E::Fr = transcript.squeeze_challenge();
@@ -256,8 +262,7 @@ where
         msm_accumulator.left.add_msm(&pi_msm); // π
 
         msm_accumulator.right.add_msm(&final_com); // C
-        let g0 = E::G1::generator();
-        msm_accumulator.right.append_term(v, -g0); // -vG
+        msm_accumulator.right.append_term(v, -E::G1::generator()); // -vG
         msm_accumulator.right.add_msm(&scaled_pi); // zπ
 
         Ok(msm_accumulator)
