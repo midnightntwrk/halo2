@@ -1,3 +1,11 @@
+//! We implement the multi-open technique developed in Halo 2. It is designed to efficiently open
+//! multiple polynomials at multiple points while minimizing proof size and verification time.
+//! In a nutshell, multiple opening queries are batched into a single query by
+//! combining the target polynomials/commitments and evaluation points using verifier-chosen
+//! random scalars.
+//!
+//! For a more detailed explanation, see the [Halo 2 Book](https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html) on Multipoint Openings.
+
 use halo2curves::pairing::Engine;
 use std::marker::PhantomData;
 
@@ -14,13 +22,12 @@ use crate::poly::kzg::params::{ParamsKZG, ParamsVerifierKZG};
 use crate::poly::query::VerifierQuery;
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery};
 use crate::utils::arithmetic::{
-    eval_polynomial, kate_division, lagrange_interpolate, powers, truncate, truncated_powers, MSM,
+    eval_polynomial, evals_inner_product, inner_product, kate_division, lagrange_interpolate,
+    msm_inner_product, powers, truncate, truncated_powers, MSM,
 };
 
 use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
-use crate::poly::kzg::utils::{
-    construct_intermediate_sets, evals_inner_product, msm_inner_product, scalars_inner_product,
-};
+use crate::poly::kzg::utils::construct_intermediate_sets;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use ff::Field;
 use group::Group;
@@ -34,20 +41,6 @@ use rand_core::OsRng;
 /// KZG verifier
 pub struct KZGCommitmentScheme<E: Engine> {
     _marker: PhantomData<E>,
-}
-
-impl<E: Engine + Debug> KZGCommitmentScheme<E> {
-    fn inner_product(
-        polys: &[Polynomial<E::Fr, Coeff>],
-        scalars: impl Iterator<Item = E::Fr>,
-    ) -> Polynomial<E::Fr, Coeff> {
-        polys
-            .iter()
-            .zip(scalars)
-            .map(|(p, s)| p.clone() * s)
-            .reduce(|acc, p| acc + &p)
-            .unwrap()
-    }
 }
 
 impl<E: MultiMillerLoop> PolynomialCommitmentScheme<E::Fr> for KZGCommitmentScheme<E>
@@ -92,14 +85,13 @@ where
         msm_best(&scalars, &bases[0..size]).into()
     }
 
-    fn open<'com, T: Transcript, I>(
+    fn multi_open<'com, T: Transcript>(
         params: &Self::Parameters,
-        prover_query: I,
+        prover_query: impl IntoIterator<Item = ProverQuery<'com, E::Fr>> + Clone,
         transcript: &mut T,
     ) -> Result<(), Error>
     where
-        I: IntoIterator<Item = ProverQuery<'com, E::Fr>> + Clone,
-        E::Fr: Sampleable<T::Hash> + Ord + Hashable<<T as Transcript>::Hash>,
+        E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         E::G1Affine: Hashable<T::Hash>,
     {
         // Refer to the halo2 book for docs:
@@ -117,7 +109,7 @@ where
 
         let q_polys = q_polys
             .iter()
-            .map(|polys| Self::inner_product(polys, truncated_powers(x1)))
+            .map(|polys| inner_product(polys, truncated_powers(x1)))
             .collect::<Vec<_>>();
 
         let f_poly = {
@@ -135,7 +127,7 @@ where
                     }
                 })
                 .collect::<Vec<_>>();
-            Self::inner_product(&f_polys, powers(x2))
+            inner_product(&f_polys, powers(x2))
         };
 
         let f_com = Self::commit(params, &f_poly);
@@ -155,7 +147,7 @@ where
         let final_poly = {
             let mut polys = q_polys;
             polys.push(f_poly);
-            Self::inner_product(&polys, truncated_powers(x4))
+            inner_product(&polys, truncated_powers(x4))
         };
         let v = eval_polynomial(&final_poly, x3);
 
@@ -170,11 +162,13 @@ where
         transcript.write(&pi).map_err(|_| Error::OpeningError)
     }
 
-    fn prepare<T: Transcript, I>(verifier_query: I, transcript: &mut T) -> Result<DualMSM<E>, Error>
+    fn multi_prepare<T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
+        transcript: &mut T,
+    ) -> Result<DualMSM<E>, Error>
     where
         E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         E::G1Affine: Hashable<T::Hash>,
-        I: IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
     {
         // Refer to the halo2 book for docs:
         // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
@@ -244,7 +238,7 @@ where
         let v = {
             let mut evals = q_evals_on_x3;
             evals.push(f_eval);
-            scalars_inner_product(&evals, truncated_powers(x4))
+            inner_product(&evals, truncated_powers(x4))
         };
 
         let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
@@ -342,8 +336,8 @@ mod tests {
             valid_queries
         };
 
-        let result =
-            KZGCommitmentScheme::prepare(queries, &mut transcript).map_err(|_| Error::OpeningError);
+        let result = KZGCommitmentScheme::multi_prepare(queries, &mut transcript)
+            .map_err(|_| Error::OpeningError);
 
         if should_fail {
             assert!(result.unwrap().verify(verifier_params).is_err());
@@ -416,7 +410,7 @@ mod tests {
         ]
         .into_iter();
 
-        KZGCommitmentScheme::open(kzg_params, queries, &mut transcript).unwrap();
+        KZGCommitmentScheme::multi_open(kzg_params, queries, &mut transcript).unwrap();
 
         transcript.finalize()
     }

@@ -35,24 +35,22 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
         poly: &Polynomial<F, LagrangeCoeff>,
     ) -> Self::Commitment;
 
-    /// Create an opening proof at a specific query
-    fn open<'com, T: Transcript, I>(
+    /// Create a multi-opening proof at a set of [ProverQuery]'s.
+    fn multi_open<'com, T: Transcript>(
         params: &Self::Parameters,
-        prover_query: I,
+        prover_query: impl IntoIterator<Item = ProverQuery<'com, F>> + Clone,
         transcript: &mut T,
     ) -> Result<(), Error>
     where
-        I: IntoIterator<Item = ProverQuery<'com, F>> + Clone,
-        F: Sampleable<T::Hash> + Ord + Hashable<<T as Transcript>::Hash>,
+        F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 
-    /// Verify an opening proof at a given query
-    fn prepare<T: Transcript, I>(
-        verifier_query: I,
+    /// Verify an multi-opening proof for a given set of [VerifierQuery]'s.
+    fn multi_prepare<T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
         transcript: &mut T,
     ) -> Result<Self::VerificationGuard, Error>
     where
-        I: IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
         F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 }

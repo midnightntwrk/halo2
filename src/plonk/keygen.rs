@@ -244,7 +244,6 @@ pub fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circ
 }
 
 /// Generate a `VerifyingKey` from an instance of `Circuit`.
-/// By default, selector compression is turned **off**.
 ///
 /// This function automatically generates the VK using the smallest
 /// value of k required for the ConcreteCircuit.
@@ -264,7 +263,6 @@ where
 }
 
 /// Generate a `VerifyingKey` from an instance of `Circuit`.
-/// By default, selector compression is turned **off**.
 pub fn keygen_vk_with_k<F, CS, ConcreteCircuit>(
     params: &CS::Parameters,
     circuit: &ConcreteCircuit,

@@ -226,6 +226,20 @@ impl<'a, F: Field, B: Basis> Add<&'a Polynomial<F, B>> for Polynomial<F, B> {
     }
 }
 
+impl<F: Field, B: Basis> Add<Polynomial<F, B>> for Polynomial<F, B> {
+    type Output = Polynomial<F, B>;
+
+    fn add(mut self, rhs: Polynomial<F, B>) -> Polynomial<F, B> {
+        parallelize(&mut self.values, |lhs, start| {
+            for (lhs, rhs) in lhs.iter_mut().zip(rhs.values[start..].iter()) {
+                *lhs += *rhs;
+            }
+        });
+
+        self
+    }
+}
+
 impl<'a, F: Field, B: Basis> Sub<&'a Polynomial<F, B>> for Polynomial<F, B> {
     type Output = Polynomial<F, B>;
 

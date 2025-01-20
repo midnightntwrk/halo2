@@ -1,52 +1,7 @@
-use crate::poly::kzg::msm::MSMKZG;
 use crate::poly::query::Query;
-use crate::utils::arithmetic::{CurveAffine, MSM};
-use ff::{Field, PrimeField};
-use halo2curves::pairing::{Engine, MultiMillerLoop};
+use ff::Field;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-
-pub(super) fn msm_inner_product<E: Engine>(
-    msms: &[MSMKZG<E>],
-    scalars: impl Iterator<Item = E::Fr>,
-) -> MSMKZG<E>
-where
-    E: MultiMillerLoop + Debug,
-    E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
-    E::Fr: Ord,
-{
-    let mut res = MSMKZG::<E>::new();
-    let mut msms = msms.to_vec();
-    for (msm, s) in msms.iter_mut().zip(scalars) {
-        msm.scale(s);
-        res.add_msm(msm);
-    }
-    res
-}
-
-pub(super) fn scalars_inner_product<F: PrimeField>(
-    v1: &[F],
-    scalars: impl Iterator<Item = F>,
-) -> F {
-    v1.iter()
-        .zip(scalars)
-        .map(|(s1, s2)| *s1 * s2)
-        .reduce(|acc, s| acc + s)
-        .unwrap()
-}
-/// Inter produc with truncated powers of the given x.
-pub(super) fn evals_inner_product<F: PrimeField + Clone>(
-    evals_set: &[Vec<F>],
-    scalars: impl Iterator<Item = F>,
-) -> Vec<F> {
-    let mut res = vec![F::ZERO; evals_set[0].len()];
-    for (poly_evals, s) in evals_set.iter().zip(scalars) {
-        for i in 0..res.len() {
-            res[i] += poly_evals[i] * s;
-        }
-    }
-    res
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct CommitmentData<F, T: PartialEq> {

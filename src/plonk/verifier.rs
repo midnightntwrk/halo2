@@ -305,5 +305,5 @@ where
 
     // We are now convinced the circuit is satisfied so long as the
     // polynomial commitments open to the correct values.
-    CS::prepare(queries, transcript).map_err(|_| Error::Opening)
+    CS::multi_prepare(queries, transcript).map_err(|_| Error::Opening)
 }

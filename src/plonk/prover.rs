@@ -571,7 +571,7 @@ where
         // We query the h(X) polynomial at x
         .chain(vanishing.open(x));
 
-    CS::open(params, instances, transcript).map_err(|_| Error::ConstraintSystemFailure)
+    CS::multi_open(params, instances, transcript).map_err(|_| Error::ConstraintSystemFailure)
 }
 
 #[test]
