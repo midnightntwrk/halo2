@@ -13,13 +13,13 @@ pub(crate) mod verifier;
 
 pub use keygen::Assembly;
 
+use crate::plonk::permutation::keygen::compute_polys_and_cosets;
 use crate::poly::commitment::PolynomialCommitmentScheme;
+use crate::poly::EvaluationDomain;
 use crate::utils::helpers::{byte_length, ProcessedSerdeObject};
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use halo2curves::serde::SerdeObject;
 use std::io;
-use crate::plonk::permutation::keygen::compute_polys_and_cosets;
-use crate::poly::EvaluationDomain;
 
 /// A permutation argument.
 #[derive(Debug, Clone)]
@@ -137,9 +137,12 @@ pub(crate) struct ProvingKey<F: PrimeField> {
 
 impl<F: WithSmallOrderMulGroup<3> + SerdeObject> ProvingKey<F> {
     /// Reads proving key for a single permutation argument from buffer using `Polynomial::read`.  
-    pub(super) fn read<R: io::Read>(reader: &mut R, format: SerdeFormat,
-                                    domain: &EvaluationDomain<F>,
-                                    p: &Argument,) -> io::Result<Self> {
+    pub(super) fn read<R: io::Read>(
+        reader: &mut R,
+        format: SerdeFormat,
+        domain: &EvaluationDomain<F>,
+        p: &Argument,
+    ) -> io::Result<Self> {
         let permutations = read_polynomial_vec(reader, format)?;
         let (polys, cosets) = compute_polys_and_cosets::<F>(domain, p, &permutations);
         Ok(ProvingKey {

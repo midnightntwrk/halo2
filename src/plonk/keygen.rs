@@ -15,8 +15,8 @@ use super::{
     permutation, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
 };
 use crate::circuit::Value;
-use crate::poly::{batch_invert_rational, ExtendedLagrangeCoeff};
 use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
+use crate::poly::{batch_invert_rational, ExtendedLagrangeCoeff};
 use crate::utils::rational::Rational;
 use crate::{poly::EvaluationDomain, utils::arithmetic::parallelize};
 
@@ -418,7 +418,7 @@ where
     // Compute l_last(X) which evaluates to 1 on the first inactive row (just
     // before the blinding factors) and 0 otherwise over the domain
     let mut l_last = vk.domain.empty_lagrange();
-    let n = l_last.len();
+    let n = vk.domain.n as usize;
     l_last[n - cs.blinding_factors() - 1] = F::ONE;
     let l_last = vk.domain.lagrange_to_coeff(l_last);
     let l_last = vk.domain.coeff_to_extended(l_last);

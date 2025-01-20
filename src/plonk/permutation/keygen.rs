@@ -17,10 +17,10 @@ use {
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 use crate::poly::commitment::PolynomialCommitmentScheme;
+use crate::poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial};
 use rayon::iter::IntoParallelRefMutIterator;
 #[cfg(feature = "thread-safe-region")]
 use std::collections::{BTreeSet, HashMap};
-use crate::poly::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial};
 
 #[cfg(not(feature = "thread-safe-region"))]
 /// Struct that accumulates all the necessary data in order to construct the permutation argument.
@@ -440,7 +440,6 @@ pub(crate) fn build_vk<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentSch
     VerifyingKey { commitments }
 }
 
-
 #[allow(clippy::type_complexity)]
 pub(crate) fn compute_polys_and_cosets<F: WithSmallOrderMulGroup<3>>(
     domain: &EvaluationDomain<F>,
@@ -472,4 +471,3 @@ pub(crate) fn compute_polys_and_cosets<F: WithSmallOrderMulGroup<3>>(
     }
     (polys, cosets)
 }
-
