@@ -2,8 +2,9 @@
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery, VerifierQuery};
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::helpers::ProcessedSerdeObject;
-use ff::PrimeField;
+use ff::{FromUniformBytes, PrimeField};
 use std::fmt::Debug;
+use crate::plonk::{Circuit, k_from_circuit};
 
 /// Public interface for a Polynomial Commitment Scheme (PCS)
 pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
@@ -82,4 +83,12 @@ pub trait Params {
 
     /// Downsize the params to work with a circuit of size `new_k`
     fn downsize(&mut self, new_k: u32);
+
+    /// Downsize the params to work with a circuit of unknown length. The
+    /// function first computes the `k` of the provided circuit, and then
+    /// downsizes the SRS.
+    fn downsize_from_circuit<F: PrimeField + Ord + FromUniformBytes<64>, ConcreCircuit: Circuit<F>>(&mut self, circuit: &ConcreCircuit) {
+        let k = k_from_circuit(circuit);
+        self.downsize(k);
+    }
 }

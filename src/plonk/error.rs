@@ -39,6 +39,8 @@ pub enum Error {
     ColumnNotInPermutation(Column<Any>),
     /// An error relating to a lookup table.
     TableError(TableError),
+    /// The SRS provided does not have the correct size for the Circuit
+    SrsError,
 }
 
 impl From<io::Error> for Error {
@@ -79,7 +81,8 @@ impl fmt::Display for Error {
                 f,
                 "Column {column:?} must be included in the permutation. Help: try applying `meta.enable_equalty` on the column",
             ),
-            Error::TableError(error) => write!(f, "{error}")
+            Error::TableError(error) => write!(f, "{error}"),
+            Error::SrsError => write!(f, "The SRS provided for the given circuit does not match its size")
         }
     }
 }
