@@ -610,8 +610,8 @@ fn test_create_proof() {
         }
     }
 
-    let mut params: ParamsKZG<Bn256> = ParamsKZG::unsafe_setup(3, OsRng);
-    let vk = keygen_vk(&mut params, &MyCircuit).expect("keygen_vk should not fail");
+    let params: ParamsKZG<Bn256> = ParamsKZG::unsafe_setup(3, OsRng);
+    let vk = keygen_vk(&params, &MyCircuit).expect("keygen_vk should not fail");
     let pk = keygen_pk(vk, &MyCircuit).expect("keygen_pk should not fail");
     let mut transcript = CircuitTranscript::<_>::init();
 

@@ -88,7 +88,7 @@ pub struct VerifyingKey<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
 }
 
 impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
-    /// Returns the commitments of the verifying key.
+    /// Returns the (permutation argument) commitments of the verifying key.
     pub fn commitments(&self) -> &Vec<CS::Commitment> {
         &self.commitments
     }

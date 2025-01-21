@@ -77,7 +77,6 @@ pub struct CircuitTranscript<H: TranscriptHash> {
 impl<H: TranscriptHash> CircuitTranscript<H> {
     /// Returns the buffer for non default reading of the buffer (such as for
     /// reading an empty proof)
-    /// TODO: SHOULD WE REMOVE THIS AND WRITE A FUNCTION THAT RETURNS THE PROOF SIZE?
     pub fn buffer(&mut self) -> &mut Cursor<Vec<u8>> {
         &mut self.buffer
     }

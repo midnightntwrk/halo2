@@ -201,7 +201,6 @@ impl<F: Field> Assignment<F> for Assembly<F> {
 
 /// Compute the minimal `k` to compute a circuit.
 pub fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
-    // TODO: We could optimize the order here.
     (1..25)
         .find(|k| {
             let n = 2usize.pow(*k);
@@ -260,7 +259,7 @@ where
     let k = k_from_circuit(circuit);
 
     if params.max_k() != k {
-        return Err(Error::SrsError)
+        return Err(Error::SrsError);
     }
 
     keygen_vk_with_k(params, circuit, k)

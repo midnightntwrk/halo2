@@ -481,7 +481,7 @@ impl Selector {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FixedQuery {
     /// Query index
-    pub index: Option<usize>,
+    pub(crate) index: Option<usize>,
     /// Column index
     pub(crate) column_index: usize,
     /// Rotation of this query
@@ -489,6 +489,10 @@ pub struct FixedQuery {
 }
 
 impl FixedQuery {
+    /// Return the query index
+    pub fn index(&self) -> Option<usize> {
+        self.index
+    }
     /// Column index
     pub fn column_index(&self) -> usize {
         self.column_index

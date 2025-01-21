@@ -23,8 +23,11 @@ use crate::poly::query::VerifierQuery;
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery};
 use crate::utils::arithmetic::{
     eval_polynomial, evals_inner_product, inner_product, kate_division, lagrange_interpolate,
-    msm_inner_product, powers, truncate, truncated_powers, MSM,
+    msm_inner_product, powers, MSM,
 };
+
+#[cfg(feature = "truncated-challenges")]
+use crate::utils::arithmetic::{truncate, truncated_powers};
 
 use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
 use crate::poly::kzg::utils::construct_intermediate_sets;
@@ -109,7 +112,15 @@ where
 
         let q_polys = q_polys
             .iter()
-            .map(|polys| inner_product(polys, truncated_powers(x1)))
+            .map(|polys| {
+                #[cfg(feature = "truncated-challenges")]
+                let x1 = truncated_powers(x1);
+
+                #[cfg(not(feature = "truncated-challenges"))]
+                let x1 = powers(x1);
+
+                inner_product(polys, x1)
+            })
             .collect::<Vec<_>>();
 
         let f_poly = {
@@ -134,6 +145,7 @@ where
         transcript.write(&f_com).map_err(|_| Error::OpeningError)?;
 
         let x3: E::Fr = transcript.squeeze_challenge();
+        #[cfg(feature = "truncated-challenges")]
         let x3 = truncate(x3);
 
         for q_poly in q_polys.iter() {
@@ -147,7 +159,13 @@ where
         let final_poly = {
             let mut polys = q_polys;
             polys.push(f_poly);
-            inner_product(&polys, truncated_powers(x4))
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            inner_product(&polys, powers)
         };
         let v = eval_polynomial(&final_poly, x3);
 
@@ -189,12 +207,28 @@ where
 
         let q_coms = q_coms
             .iter()
-            .map(|msms| msm_inner_product(msms, truncated_powers(x1)))
+            .map(|msms| {
+                #[cfg(feature = "truncated-challenges")]
+                let powers = truncated_powers(x1);
+
+                #[cfg(not(feature = "truncated-challenges"))]
+                let powers = powers(x1);
+
+                msm_inner_product(msms, powers)
+            })
             .collect::<Vec<_>>();
 
         let q_eval_sets = q_eval_sets
             .iter()
-            .map(|evals| evals_inner_product(evals, truncated_powers(x1)))
+            .map(|evals| {
+                #[cfg(feature = "truncated-challenges")]
+                let powers = truncated_powers(x1);
+
+                #[cfg(not(feature = "truncated-challenges"))]
+                let powers = powers(x1);
+
+                evals_inner_product(evals, powers)
+            })
             .collect::<Vec<_>>();
 
         let f_com: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
@@ -202,6 +236,7 @@ where
         // Sample a challenge x_3 for checking that f(X) was committed to
         // correctly.
         let x3: E::Fr = transcript.squeeze_challenge();
+        #[cfg(feature = "truncated-challenges")]
         let x3 = truncate(x3);
 
         let mut q_evals_on_x3 = Vec::<E::Fr>::with_capacity(q_eval_sets.len());
@@ -232,13 +267,27 @@ where
             let mut f_com_as_msm = MSMKZG::new();
             f_com_as_msm.append_term(E::Fr::ONE, f_com.into());
             polys.push(f_com_as_msm);
-            msm_inner_product(&polys, truncated_powers(x4))
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            msm_inner_product(&polys, powers)
         };
 
         let v = {
             let mut evals = q_evals_on_x3;
             evals.push(f_eval);
-            inner_product(&evals, truncated_powers(x4))
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            inner_product(&evals, powers)
         };
 
         let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;

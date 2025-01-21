@@ -27,7 +27,7 @@ pub(super) type IntermediateSets<F, Q> = (
     Vec<Vec<F>>,
 );
 
-pub(super) fn construct_intermediate_sets<F: Field + Ord, I, Q: Query<F>>(
+pub fn construct_intermediate_sets<F: Field + Ord, I, Q: Query<F>>(
     queries: I,
 ) -> IntermediateSets<F, Q>
 where
