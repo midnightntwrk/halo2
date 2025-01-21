@@ -261,7 +261,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             a: Value::unknown(),
             k,
         };
-        let vk = keygen_vk(&params, &empty_circuit).expect("keygen_vk should not fail");
+        let vk = keygen_vk_with_k(&params, &empty_circuit, k).expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &empty_circuit).expect("keygen_pk should not fail");
         (params, pk)
     }

@@ -27,11 +27,19 @@ impl<E: Engine> Params for ParamsKZG<E> {
 
         self.g.len().ilog2()
     }
+
+    fn downsize(&mut self, new_k: u32) {
+        ParamsKZG::<E>::downsize(self, new_k)
+    }
 }
 
 impl<E: Engine + Debug> ParamsKZG<E> {
     /// Downsize the current parameters to match a smaller `k`.
     pub fn downsize(&mut self, new_k: u32) {
+        if self.max_k() == new_k {
+            return;
+        }
+
         let n = 1 << new_k;
         assert!(n < self.g_lagrange.len() as u32);
         self.g.truncate(n as usize);

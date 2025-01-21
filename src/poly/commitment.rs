@@ -79,4 +79,7 @@ pub trait Guard<F: PrimeField, CS: PolynomialCommitmentScheme<F>>: Sized {
 pub trait Params {
     /// Returns the max size of polynomials that these parameters can commit to
     fn max_k(&self) -> u32;
+
+    /// Downsize the params to work with a circuit of size `new_k`
+    fn downsize(&mut self, new_k: u32);
 }

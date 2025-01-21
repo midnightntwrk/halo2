@@ -10,8 +10,8 @@ use halo2_proofs::transcript::{CircuitTranscript, Transcript};
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     plonk::{
-        create_proof, keygen_pk, keygen_vk, prepare, Advice, Circuit, Column, ConstraintSystem,
-        Error, Fixed, Instance, ProvingKey,
+        create_proof, keygen_pk, keygen_vk_with_k, prepare, Advice, Circuit, Column,
+        ConstraintSystem, Error, Fixed, Instance, ProvingKey,
     },
     poly::{
         kzg::{params::ParamsKZG, KZGCommitmentScheme},
@@ -128,7 +128,7 @@ fn main() {
     let k = 4;
     let circuit = StandardPlonk(Fr::random(OsRng));
     let params = ParamsKZG::<Bn256>::unsafe_setup(k, OsRng);
-    let vk = keygen_vk::<_, KZGCommitmentScheme<Bn256>, _>(&params, &circuit)
+    let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bn256>, _>(&params, &circuit, k)
         .expect("vk should not fail");
     let pk = keygen_pk(vk, &circuit).expect("pk should not fail");
 

@@ -243,13 +243,13 @@ pub fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circ
         .expect("A circuit which can be implemented with at most 2^24 rows.")
 }
 
-/// Generate a `VerifyingKey` from an instance of `Circuit`.
+/// Generates a `VerifyingKey` from a `Circuit` instance.
 ///
-/// This function automatically generates the VK using the smallest
-/// value of k required for the ConcreteCircuit.
-/// To specify a particular value for k, use keygen_vk_with_k instead.
+/// Automatically determines the smallest `k` required for the given circuit
+/// and adjusts the received parameters to match the circuit's size.
+/// Use `keygen_vk_with_k` to specify a custom `k` value.
 pub fn keygen_vk<F, CS, ConcreteCircuit>(
-    params: &CS::Parameters,
+    params: &mut CS::Parameters,
     circuit: &ConcreteCircuit,
 ) -> Result<VerifyingKey<F, CS>, Error>
 where
@@ -258,6 +258,12 @@ where
     ConcreteCircuit: Circuit<F>,
 {
     let k = k_from_circuit(circuit);
+
+    if params.max_k() < k {
+        return Err(Error::not_enough_rows_available(params.max_k()));
+    }
+
+    params.downsize(k);
 
     keygen_vk_with_k(params, circuit, k)
 }
