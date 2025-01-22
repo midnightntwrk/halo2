@@ -1,6 +1,5 @@
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use group::ff::BatchInvert;
-use halo2curves::serde::SerdeObject;
 use rand_core::RngCore;
 use std::iter::{self, ExactSizeIterator};
 
@@ -180,7 +179,7 @@ impl<F: PrimeField> super::ProvingKey<F> {
         transcript: &mut T,
     ) -> Result<(), Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         // Hash permutation evals
         for eval in self.polys.iter().map(|poly| eval_polynomial(poly, x)) {
@@ -199,7 +198,7 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
         transcript: &mut T,
     ) -> Result<Evaluated<F>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         let domain = &pk.vk.domain;
         let blinding_factors = pk.vk.cs.blinding_factors();

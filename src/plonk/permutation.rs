@@ -23,7 +23,7 @@ use std::io;
 #[derive(Debug, Clone)]
 pub struct Argument {
     /// A sequence of columns involved in the argument.
-    pub(super) columns: Vec<Column<Any>>,
+    pub columns: Vec<Column<Any>>,
 }
 
 impl Argument {
@@ -88,14 +88,14 @@ pub struct VerifyingKey<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
 }
 
 impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
-    /// Returns commitments of sigma polynomials
+    /// Returns the (permutation argument) commitments of the verifying key.
     pub fn commitments(&self) -> &Vec<CS::Commitment> {
         &self.commitments
     }
 
     pub(crate) fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()>
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         for commitment in &self.commitments {
             commitment.write(writer, format)?;
@@ -109,7 +109,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
         format: SerdeFormat,
     ) -> io::Result<Self>
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         let commitments = (0..argument.columns.len())
             .map(|_| CS::Commitment::read(reader, format))
@@ -119,7 +119,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
 
     pub(crate) fn bytes_length(&self, format: SerdeFormat) -> usize
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         self.commitments.len() * byte_length::<CS::Commitment>(format)
     }

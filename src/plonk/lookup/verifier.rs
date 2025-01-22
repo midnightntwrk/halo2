@@ -9,7 +9,6 @@ use crate::{
     poly::{Rotation, VerifierQuery},
 };
 use ff::{PrimeField, WithSmallOrderMulGroup};
-use halo2curves::serde::SerdeObject;
 
 pub struct PermutationCommitments<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
     permuted_input_commitment: CS::Commitment,
@@ -57,7 +56,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> PermutationCommitments<F,
         transcript: &mut T,
     ) -> Result<Committed<F, CS>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
     {
         let product_commitment = transcript.read()?;
 
@@ -74,7 +73,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> Committed<F, CS> {
         transcript: &mut T,
     ) -> Result<Evaluated<F, CS>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         let product_eval = transcript.read()?;
         let product_next_eval = transcript.read()?;

@@ -1,8 +1,9 @@
 //! Trait for a commitment scheme
+use crate::plonk::{k_from_circuit, Circuit};
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery, VerifierQuery};
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::helpers::ProcessedSerdeObject;
-use ff::PrimeField;
+use ff::{FromUniformBytes, PrimeField};
 use std::fmt::Debug;
 
 /// Public interface for a Polynomial Commitment Scheme (PCS)
@@ -35,25 +36,23 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
         poly: &Polynomial<F, LagrangeCoeff>,
     ) -> Self::Commitment;
 
-    /// Create an opening proof at a specific query
-    fn open<'com, T: Transcript, I>(
+    /// Create a multi-opening proof at a set of [ProverQuery]'s.
+    fn multi_open<'com, T: Transcript>(
         params: &Self::Parameters,
-        prover_query: I,
+        prover_query: impl IntoIterator<Item = ProverQuery<'com, F>> + Clone,
         transcript: &mut T,
     ) -> Result<(), Error>
     where
-        I: IntoIterator<Item = ProverQuery<'com, F>> + Clone,
-        F: Sampleable<T::Hash>,
+        F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 
-    /// Verify an opening proof at a given query
-    fn prepare<T: Transcript, I>(
-        verifier_query: I,
+    /// Verify an multi-opening proof for a given set of [VerifierQuery]'s.
+    fn multi_prepare<T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
         transcript: &mut T,
     ) -> Result<Self::VerificationGuard, Error>
     where
-        I: IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
-        F: Sampleable<T::Hash>,
+        F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         Self::Commitment: Hashable<T::Hash>;
 }
 
@@ -81,4 +80,21 @@ pub trait Guard<F: PrimeField, CS: PolynomialCommitmentScheme<F>>: Sized {
 pub trait Params {
     /// Returns the max size of polynomials that these parameters can commit to
     fn max_k(&self) -> u32;
+
+    /// Downsize the params to work with a circuit of size `new_k`
+    fn downsize(&mut self, new_k: u32);
+
+    /// Downsize the params to work with a circuit of unknown length. The
+    /// function first computes the `k` of the provided circuit, and then
+    /// downsizes the SRS.
+    fn downsize_from_circuit<
+        F: PrimeField + Ord + FromUniformBytes<64>,
+        ConcreCircuit: Circuit<F>,
+    >(
+        &mut self,
+        circuit: &ConcreCircuit,
+    ) {
+        let k = k_from_circuit(circuit);
+        self.downsize(k);
+    }
 }

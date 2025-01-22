@@ -8,8 +8,10 @@ use group::{
     Curve, GroupOpsOwned, ScalarMulOwned,
 };
 use std::fmt::Debug;
+use std::ops::{Add, Mul};
 
 use halo2curves::fft::best_fft;
+use halo2curves::pairing::{Engine, MultiMillerLoop};
 pub use halo2curves::{CurveAffine, CurveExt};
 
 /// This represents an element of a group with basic operations that can be
@@ -230,8 +232,85 @@ pub fn lagrange_interpolate<F: Field>(points: &[F], evals: &[F]) -> Vec<F> {
     }
 }
 
+#[cfg(feature = "truncated-challenges")]
+use num_bigint::BigUint;
+
+/// Truncates a scalar field element to half its byte size.
+///
+/// This function reduces a scalar field element `scalar` to half its size by
+/// retaining only the lower half of its little-endian byte representation.
+///
+/// # Note
+/// For cryptographically secure elliptic curves, the scalar field is
+/// approximately twice the size of the security parameter. When scalars are
+/// sampled uniformly at random, truncating to half the field size retains
+/// sufficient entropy for security while reducing computational overhead.
+///
+/// # Warning
+/// 128 bits may not be enough entropy depending on the application. For example,
+/// it makes a collision attack feasible with 2^64 memory and ~2^64 operations.
+#[cfg(feature = "truncated-challenges")]
+pub(crate) fn truncate<F: PrimeField>(scalar: F) -> F {
+    let nb_bytes = F::NUM_BITS.div_ceil(8).div_ceil(2) as usize;
+    let bytes = scalar.to_repr().as_ref()[..nb_bytes].to_vec();
+    let bi = BigUint::from_bytes_le(&bytes);
+    F::from_str_vartime(&BigUint::to_string(&bi)).unwrap()
+}
+
+#[cfg(feature = "truncated-challenges")]
+pub(crate) fn truncated_powers<F: PrimeField>(base: F) -> impl Iterator<Item = F> {
+    powers(base).map(truncate)
+}
+
 pub(crate) fn powers<F: Field>(base: F) -> impl Iterator<Item = F> {
     std::iter::successors(Some(F::ONE), move |power| Some(base * power))
+}
+
+pub(crate) fn inner_product<F: PrimeField, T: Mul<F, Output = T> + Add<T, Output = T> + Clone>(
+    polys: &[T],
+    scalars: impl Iterator<Item = F>,
+) -> T {
+    polys
+        .iter()
+        .zip(scalars)
+        .map(|(p, s)| p.clone() * s)
+        .reduce(|acc, p| acc + p)
+        .unwrap()
+}
+
+pub(crate) fn msm_inner_product<E: Engine>(
+    msms: &[MSMKZG<E>],
+    scalars: impl Iterator<Item = E::Fr>,
+) -> MSMKZG<E>
+where
+    E: MultiMillerLoop + Debug,
+    E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::Fr: Ord,
+{
+    let mut res = MSMKZG::<E>::new();
+    let mut msms = msms.to_vec();
+    for (msm, s) in msms.iter_mut().zip(scalars) {
+        msm.scale(s);
+        res.add_msm(msm);
+    }
+    res
+}
+
+/// Computes the inner product of a set of polynomial evaluations and a set of scalar values.
+/// This function computes the weighted sum of polynomial evaluations. Each vector in `evals_set`
+/// is multiplied element-wise by a corresponding scalar from `scalars`, and the results are accumulated
+/// into a single vector.
+pub(crate) fn evals_inner_product<F: PrimeField + Clone>(
+    evals_set: &[Vec<F>],
+    scalars: impl Iterator<Item = F>,
+) -> Vec<F> {
+    let mut res = vec![F::ZERO; evals_set[0].len()];
+    for (poly_evals, s) in evals_set.iter().zip(scalars) {
+        for i in 0..res.len() {
+            res[i] += poly_evals[i] * s;
+        }
+    }
+    res
 }
 
 /// Multi scalar multiplication engine
@@ -263,6 +342,7 @@ use rand_core::OsRng;
 
 #[cfg(test)]
 use crate::halo2curves::pasta::Fp;
+use crate::poly::kzg::msm::MSMKZG;
 
 #[test]
 fn test_lagrange_interpolate() {

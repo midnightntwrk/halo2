@@ -9,7 +9,6 @@ use crate::{
 };
 use ff::{FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use group::ff::BatchInvert;
-use halo2curves::serde::SerdeObject;
 use rand_core::{CryptoRng, RngCore};
 use std::{collections::BTreeMap, iter};
 
@@ -66,7 +65,7 @@ impl<F: WithSmallOrderMulGroup<3> + Ord> Argument<F> {
         transcript: &mut T,
     ) -> Result<Permuted<F>, Error>
     where
-        F: FromUniformBytes<64> + SerdeObject,
+        F: FromUniformBytes<64>,
         CS::Commitment: Hashable<T::Hash>,
     {
         // Closure to get values of expressions and compress them
@@ -153,7 +152,7 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
         transcript: &mut T,
     ) -> Result<Committed<F>, Error>
     where
-        F: WithSmallOrderMulGroup<3> + FromUniformBytes<64> + SerdeObject,
+        F: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
         CS::Commitment: Hashable<T::Hash>,
     {
         let blinding_factors = pk.vk.cs.blinding_factors();
@@ -286,7 +285,7 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
         transcript: &mut T,
     ) -> Result<Evaluated<F>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         let domain = &pk.vk.domain;
         let x_inv = domain.rotate_omega(x, Rotation::prev());
@@ -368,7 +367,7 @@ fn permute_expression_pair<F, CS: PolynomialCommitmentScheme<F>, R: RngCore>(
     table_expression: &Polynomial<F, LagrangeCoeff>,
 ) -> Result<ExpressionPair<F>, Error>
 where
-    F: WithSmallOrderMulGroup<3> + Ord + FromUniformBytes<64> + SerdeObject,
+    F: WithSmallOrderMulGroup<3> + Ord + FromUniformBytes<64>,
 {
     let blinding_factors = pk.vk.cs.blinding_factors();
     let usable_rows = pk.vk.n() as usize - (blinding_factors + 1);

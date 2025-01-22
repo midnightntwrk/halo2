@@ -489,6 +489,10 @@ pub struct FixedQuery {
 }
 
 impl FixedQuery {
+    /// Return the query index
+    pub fn index(&self) -> Option<usize> {
+        self.index
+    }
     /// Column index
     pub fn column_index(&self) -> usize {
         self.column_index
@@ -504,7 +508,7 @@ impl FixedQuery {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct AdviceQuery {
     /// Query index
-    pub(crate) index: Option<usize>,
+    pub index: Option<usize>,
     /// Column index
     pub(crate) column_index: usize,
     /// Rotation of this query
@@ -534,7 +538,7 @@ impl AdviceQuery {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct InstanceQuery {
     /// Query index
-    pub(crate) index: Option<usize>,
+    pub index: Option<usize>,
     /// Column index
     pub(crate) column_index: usize,
     /// Rotation of this query
@@ -1338,11 +1342,6 @@ impl<F: Field> Product<Self> for Expression<F> {
     }
 }
 
-// /// Represents an index into a vector where each entry corresponds to a distinct
-// /// point that polynomials are queried at.
-// #[derive(Copy, Clone, Debug)]
-// pub(crate) struct PointIndex(pub usize);
-
 /// A "virtual cell" is a PLONK cell that has been queried at a particular relative offset
 /// within a custom gate.
 #[derive(Clone, Debug)]
@@ -2140,7 +2139,8 @@ impl<F: Field> ConstraintSystem<F> {
             });
     }
 
-    pub(crate) fn phases(&self) -> impl Iterator<Item = sealed::Phase> {
+    /// Return an iterator over the phases of the constraint system.
+    pub fn phases(&self) -> impl Iterator<Item = sealed::Phase> {
         let max_phase = self
             .advice_column_phase
             .iter()

@@ -40,7 +40,7 @@ pub enum Error {
 pub trait Basis: Copy + Debug + Send + Sync {}
 
 /// The polynomial is defined as coefficients
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Coeff;
 impl Basis for Coeff {}
 
@@ -57,7 +57,7 @@ impl Basis for ExtendedLagrangeCoeff {}
 
 /// Represents a univariate polynomial defined over a field and a particular
 /// basis.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Polynomial<F, B> {
     pub(crate) values: Vec<F>,
     pub(crate) _marker: PhantomData<B>,
@@ -216,6 +216,20 @@ impl<'a, F: Field, B: Basis> Add<&'a Polynomial<F, B>> for Polynomial<F, B> {
     type Output = Polynomial<F, B>;
 
     fn add(mut self, rhs: &'a Polynomial<F, B>) -> Polynomial<F, B> {
+        parallelize(&mut self.values, |lhs, start| {
+            for (lhs, rhs) in lhs.iter_mut().zip(rhs.values[start..].iter()) {
+                *lhs += *rhs;
+            }
+        });
+
+        self
+    }
+}
+
+impl<F: Field, B: Basis> Add<Polynomial<F, B>> for Polynomial<F, B> {
+    type Output = Polynomial<F, B>;
+
+    fn add(mut self, rhs: Polynomial<F, B>) -> Polynomial<F, B> {
         parallelize(&mut self.values, |lhs, start| {
             for (lhs, rhs) in lhs.iter_mut().zip(rhs.values[start..].iter()) {
                 *lhs += *rhs;
