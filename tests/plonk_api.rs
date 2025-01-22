@@ -7,8 +7,9 @@ use ff::{FromUniformBytes, WithSmallOrderMulGroup};
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::dev::MockProver;
 use halo2_proofs::plonk::{
-    create_proof as create_plonk_proof, keygen_pk, keygen_vk, prepare as prepare_plonk_proof,
-    Advice, Circuit, Column, ConstraintSystem, Error, Fixed, ProvingKey, TableColumn, VerifyingKey,
+    create_proof as create_plonk_proof, keygen_pk, keygen_vk, keygen_vk_with_k,
+    prepare as prepare_plonk_proof, Advice, Circuit, Column, ConstraintSystem, Error, Fixed,
+    ProvingKey, TableColumn, VerifyingKey,
 };
 use halo2_proofs::poly::commitment::{Guard, PolynomialCommitmentScheme};
 use halo2_proofs::poly::kzg::params::ParamsKZG;
@@ -414,7 +415,7 @@ fn plonk_api() {
             // k that is too small for the minimum required number of rows.
             let much_too_small_params= <$scheme as PolynomialCommitmentScheme<$field>>::gen_params(1);
             assert_matches!(
-                keygen_vk::<_, $scheme, _>(&much_too_small_params, &empty_circuit),
+                keygen_vk_with_k::<_, $scheme, _>(&much_too_small_params, &empty_circuit, 1),
                 Err(Error::NotEnoughRowsAvailable {
                     current_k: 1,
                 })
@@ -424,7 +425,7 @@ fn plonk_api() {
             // k that is too small for the number of rows the circuit uses.
             let slightly_too_small_params = <$scheme as PolynomialCommitmentScheme<$field>>::gen_params(K-1);
             assert_matches!(
-                keygen_vk::<_, $scheme, _>(&slightly_too_small_params, &empty_circuit),
+                keygen_vk_with_k::<_, $scheme, _>(&slightly_too_small_params, &empty_circuit, K - 1),
                 Err(Error::NotEnoughRowsAvailable {
                     current_k,
                 }) if current_k == K - 1
@@ -433,7 +434,7 @@ fn plonk_api() {
     }
 
     fn keygen<F, Scheme: PolynomialCommitmentScheme<F>>(
-        params: &Scheme::Parameters,
+        params: &mut Scheme::Parameters,
     ) -> ProvingKey<F, Scheme>
     where
         F: FromUniformBytes<64> + WithSmallOrderMulGroup<3> + Ord,
@@ -529,9 +530,9 @@ fn plonk_api() {
     bad_keys!(Fr, Scheme);
 
     let rng = OsRng;
-    let params = ParamsKZG::<Bn256>::unsafe_setup(K, rng);
+    let mut params = ParamsKZG::<Bn256>::unsafe_setup(K, rng);
 
-    let pk = keygen::<Fr, Scheme>(&params);
+    let pk = keygen::<Fr, Scheme>(&mut params);
 
     let proof = create_proof::<Fr, Scheme, CircuitTranscript<State>, _>(rng, &params, &pk);
 

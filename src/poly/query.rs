@@ -7,8 +7,8 @@ use crate::{
     utils::arithmetic::eval_polynomial,
 };
 
-pub trait Query<F>: Sized + Clone + Send + Sync {
-    type Commitment: PartialEq + Copy + Send + Sync;
+pub trait Query<F>: Debug + Sized + Clone + Send + Sync {
+    type Commitment: Debug + PartialEq + Copy + Send + Sync;
     type Eval: Clone + Default + Debug;
 
     fn get_point(&self) -> F;
@@ -36,14 +36,14 @@ where
 }
 
 #[doc(hidden)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PolynomialPointer<'com, F: PrimeField> {
     pub(crate) poly: &'com Polynomial<F, Coeff>,
 }
 
 impl<'com, F: PrimeField> PartialEq for PolynomialPointer<'com, F> {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.poly, other.poly)
+        self.poly == other.poly
     }
 }
 

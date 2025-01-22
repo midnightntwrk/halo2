@@ -27,11 +27,19 @@ impl<E: Engine> Params for ParamsKZG<E> {
 
         self.g.len().ilog2()
     }
+
+    fn downsize(&mut self, new_k: u32) {
+        ParamsKZG::<E>::downsize(self, new_k)
+    }
 }
 
 impl<E: Engine + Debug> ParamsKZG<E> {
     /// Downsize the current parameters to match a smaller `k`.
     pub fn downsize(&mut self, new_k: u32) {
+        if self.max_k() == new_k {
+            return;
+        }
+
         let n = 1 << new_k;
         assert!(n < self.g_lagrange.len() as u32);
         self.g.truncate(n as usize);
@@ -245,7 +253,7 @@ impl<E: Engine + Debug> ParamsKZG<E> {
 // TODO: see the issue at https://github.com/appliedzkp/halo2/issues/45
 // So we probably need much smaller verifier key. However for new bases in g1 should be in verifier keys.
 /// KZG multi-open verification parameters
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ParamsVerifierKZG<E: Engine> {
     pub(crate) s_g2: E::G2Affine,
 }

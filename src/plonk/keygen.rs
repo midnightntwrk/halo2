@@ -199,10 +199,8 @@ impl<F: Field> Assignment<F> for Assembly<F> {
     }
 }
 
-// This code also appears in `keygen`. We duplicate it here for simplicity of the
-// function body.
-fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
-    // TODO: We could optimize the order here.
+/// Compute the minimal `k` to compute a circuit.
+pub fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit: &C) -> u32 {
     (1..25)
         .find(|k| {
             let n = 2usize.pow(*k);
@@ -244,8 +242,11 @@ fn k_from_circuit<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(circuit:
         .expect("A circuit which can be implemented with at most 2^24 rows.")
 }
 
-/// Generate a `VerifyingKey` from an instance of `Circuit`.
-/// By default, selector compression is turned **off**.
+/// Generates a `VerifyingKey` from a `Circuit` instance.
+///
+/// Automatically determines the smallest `k` required for the given circuit
+/// and adjusts the received parameters to match the circuit's size.
+/// Use `keygen_vk_with_k` to specify a custom `k` value.
 pub fn keygen_vk<F, CS, ConcreteCircuit>(
     params: &CS::Parameters,
     circuit: &ConcreteCircuit,
@@ -256,6 +257,25 @@ where
     ConcreteCircuit: Circuit<F>,
 {
     let k = k_from_circuit(circuit);
+
+    if params.max_k() != k {
+        return Err(Error::SrsError);
+    }
+
+    keygen_vk_with_k(params, circuit, k)
+}
+
+/// Generate a `VerifyingKey` from an instance of `Circuit`.
+pub fn keygen_vk_with_k<F, CS, ConcreteCircuit>(
+    params: &CS::Parameters,
+    circuit: &ConcreteCircuit,
+    k: u32,
+) -> Result<VerifyingKey<F, CS>, Error>
+where
+    F: WithSmallOrderMulGroup<3> + FromUniformBytes<64> + Ord,
+    CS: PolynomialCommitmentScheme<F>,
+    ConcreteCircuit: Circuit<F>,
+{
     if params.max_k() < k {
         return Err(Error::NotEnoughRowsAvailable {
             current_k: params.max_k(),

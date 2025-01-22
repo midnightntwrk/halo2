@@ -6,10 +6,10 @@ use crate::poly::kzg::KZGCommitmentScheme;
 use crate::poly::Error;
 use crate::utils::arithmetic::parallelize;
 use crate::utils::arithmetic::MSM;
+use crate::utils::helpers::ProcessedSerdeObject;
 use group::prime::PrimeCurveAffine;
 use group::{Curve, Group};
 use halo2curves::msm::msm_best;
-use halo2curves::serde::SerdeObject;
 use halo2curves::{
     pairing::{Engine, MillerLoopResult, MultiMillerLoop},
     CurveAffine,
@@ -94,6 +94,12 @@ pub struct DualMSM<E: Engine> {
     pub(crate) right: MSMKZG<E>,
 }
 
+/// A [DualMSM] split into left and right vectors of `(Scalar, Point)` tuples
+pub type SplitDualMSM<'a, E> = (
+    Vec<(&'a <E as Engine>::Fr, &'a <E as Engine>::G1)>,
+    Vec<(&'a <E as Engine>::Fr, &'a <E as Engine>::G1)>,
+);
+
 impl<E: MultiMillerLoop + Debug> Default for DualMSM<E>
 where
     E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
@@ -105,8 +111,7 @@ where
 
 impl<E: MultiMillerLoop> Guard<E::Fr, KZGCommitmentScheme<E>> for DualMSM<E>
 where
-    E::Fr: SerdeObject,
-    E::G1Affine: Default + SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
 {
     fn verify(
         self,
@@ -126,6 +131,23 @@ where
             left: MSMKZG::new(),
             right: MSMKZG::new(),
         }
+    }
+
+    /// Split the [DualMSM] into `left` and `right`.
+    pub fn split(&self) -> SplitDualMSM<E> {
+        let left = self
+            .left
+            .scalars
+            .iter()
+            .zip(self.left.bases.iter())
+            .collect();
+        let right = self
+            .right
+            .scalars
+            .iter()
+            .zip(self.right.bases.iter())
+            .collect();
+        (left, right)
     }
 
     /// Scale all scalars in the MSM by some scaling factor

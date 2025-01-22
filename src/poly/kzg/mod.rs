@@ -1,3 +1,11 @@
+//! We implement the multi-open technique developed in Halo 2. It is designed to efficiently open
+//! multiple polynomials at multiple points while minimizing proof size and verification time.
+//! In a nutshell, multiple opening queries are batched into a single query by
+//! combining the target polynomials/commitments and evaluation points using verifier-chosen
+//! random scalars.
+//!
+//! For a more detailed explanation, see the [Halo 2 Book](https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html) on Multipoint Openings.
+
 use halo2curves::pairing::Engine;
 use std::marker::PhantomData;
 
@@ -5,24 +13,30 @@ use std::marker::PhantomData;
 pub mod msm;
 /// KZG commitment scheme
 pub mod params;
+mod utils;
 
 use std::fmt::Debug;
 
 use crate::poly::kzg::msm::{DualMSM, MSMKZG};
 use crate::poly::kzg::params::{ParamsKZG, ParamsVerifierKZG};
-use crate::poly::query::Query;
 use crate::poly::query::VerifierQuery;
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery};
-use crate::utils::arithmetic::{kate_division, powers, MSM};
+use crate::utils::arithmetic::{
+    eval_polynomial, evals_inner_product, inner_product, kate_division, lagrange_interpolate,
+    msm_inner_product, powers, MSM,
+};
 
-use crate::poly::commitment::PolynomialCommitmentScheme;
+#[cfg(feature = "truncated-challenges")]
+use crate::utils::arithmetic::{truncate, truncated_powers};
+
+use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
+use crate::poly::kzg::utils::construct_intermediate_sets;
 use crate::transcript::{Hashable, Sampleable, Transcript};
+use crate::utils::helpers::ProcessedSerdeObject;
 use ff::Field;
-use group::prime::PrimeCurveAffine;
 use group::Group;
 use halo2curves::msm::msm_best;
 use halo2curves::pairing::MultiMillerLoop;
-use halo2curves::serde::SerdeObject;
 use halo2curves::CurveAffine;
 use rand_core::OsRng;
 
@@ -34,8 +48,7 @@ pub struct KZGCommitmentScheme<E: Engine> {
 
 impl<E: MultiMillerLoop> PolynomialCommitmentScheme<E::Fr> for KZGCommitmentScheme<E>
 where
-    E::Fr: SerdeObject,
-    E::G1Affine: Default + SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
 {
     type Parameters = ParamsKZG<E>;
     type VerifierParameters = ParamsVerifierKZG<E>;
@@ -74,150 +87,228 @@ where
         msm_best(&scalars, &bases[0..size]).into()
     }
 
-    fn open<'com, T: Transcript, I>(
+    fn multi_open<'com, T: Transcript>(
         params: &Self::Parameters,
-        prover_query: I,
+        prover_query: impl IntoIterator<Item = ProverQuery<'com, E::Fr>> + Clone,
         transcript: &mut T,
     ) -> Result<(), Error>
     where
-        I: IntoIterator<Item = ProverQuery<'com, E::Fr>> + Clone,
-        E::Fr: Sampleable<T::Hash>,
+        E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         E::G1Affine: Hashable<T::Hash>,
     {
-        let v: E::Fr = transcript.squeeze_challenge();
-        let commitment_data = construct_intermediate_sets(prover_query);
+        // Refer to the halo2 book for docs:
+        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+        let x1: E::Fr = transcript.squeeze_challenge();
+        let x2: E::Fr = transcript.squeeze_challenge();
 
-        for commitment_at_a_point in commitment_data.iter() {
-            let z = commitment_at_a_point.point;
-            let (poly_batch, eval_batch) = commitment_at_a_point
-                .queries
+        let (poly_map, point_sets) = construct_intermediate_sets(prover_query);
+
+        let mut q_polys = vec![vec![]; point_sets.len()];
+
+        for com_data in poly_map.iter() {
+            q_polys[com_data.set_index].push(com_data.commitment.poly.clone());
+        }
+
+        let q_polys = q_polys
+            .iter()
+            .map(|polys| {
+                #[cfg(feature = "truncated-challenges")]
+                let x1 = truncated_powers(x1);
+
+                #[cfg(not(feature = "truncated-challenges"))]
+                let x1 = powers(x1);
+
+                inner_product(polys, x1)
+            })
+            .collect::<Vec<_>>();
+
+        let f_poly = {
+            let f_polys = point_sets
                 .iter()
-                .zip(powers(v))
-                .map(|(query, power_of_v)| {
-                    assert_eq!(query.get_point(), z);
-
-                    let poly = query.get_commitment().poly;
-                    let eval = query.get_eval();
-
-                    (poly.clone() * power_of_v, eval * power_of_v)
+                .zip(q_polys.clone())
+                .map(|(points, q_poly)| {
+                    let mut poly = points.iter().fold(q_poly.clone().values, |poly, point| {
+                        kate_division(&poly, *point)
+                    });
+                    poly.resize(1 << params.max_k() as usize, E::Fr::ZERO);
+                    Polynomial {
+                        values: poly,
+                        _marker: PhantomData,
+                    }
                 })
-                .reduce(|(poly_acc, eval_acc), (poly, eval)| (poly_acc + &poly, eval_acc + eval))
-                .unwrap();
+                .collect::<Vec<_>>();
+            inner_product(&f_polys, powers(x2))
+        };
 
-            let poly_batch = &poly_batch - eval_batch;
-            let witness_poly = Polynomial {
-                values: kate_division(&poly_batch.values, z),
+        let f_com = Self::commit(params, &f_poly);
+        transcript.write(&f_com).map_err(|_| Error::OpeningError)?;
+
+        let x3: E::Fr = transcript.squeeze_challenge();
+        #[cfg(feature = "truncated-challenges")]
+        let x3 = truncate(x3);
+
+        for q_poly in q_polys.iter() {
+            transcript
+                .write(&eval_polynomial(&q_poly.values, x3))
+                .map_err(|_| Error::OpeningError)?;
+        }
+
+        let x4: E::Fr = transcript.squeeze_challenge();
+
+        let final_poly = {
+            let mut polys = q_polys;
+            polys.push(f_poly);
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            inner_product(&polys, powers)
+        };
+        let v = eval_polynomial(&final_poly, x3);
+
+        let pi = {
+            let pi_poly = Polynomial {
+                values: kate_division(&(&final_poly - v).values, x3),
                 _marker: PhantomData,
             };
-            let w = Self::commit(params, &witness_poly);
+            Self::commit(params, &pi_poly)
+        };
 
-            transcript.write(&w).map_err(|_| Error::OpeningError)?;
-        }
-
-        Ok(())
+        transcript.write(&pi).map_err(|_| Error::OpeningError)
     }
 
-    fn prepare<T: Transcript, I>(verifier_query: I, transcript: &mut T) -> Result<DualMSM<E>, Error>
+    fn multi_prepare<T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
+        transcript: &mut T,
+    ) -> Result<DualMSM<E>, Error>
     where
-        E::Fr: Sampleable<T::Hash>,
+        E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
         E::G1Affine: Hashable<T::Hash>,
-        I: IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
     {
-        let v: E::Fr = transcript.squeeze_challenge();
+        // Refer to the halo2 book for docs:
+        // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
+        let x1: E::Fr = transcript.squeeze_challenge();
+        let x2: E::Fr = transcript.squeeze_challenge();
 
-        let commitment_data = construct_intermediate_sets(verifier_query);
+        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query);
 
-        let w = (0..commitment_data.len())
-            .map(|_| transcript.read().map_err(|_| Error::SamplingError))
-            .collect::<Result<Vec<E::G1Affine>, Error>>()?;
+        let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
+        let mut q_eval_sets = vec![vec![]; point_sets.len()];
 
-        let u: E::Fr = transcript.squeeze_challenge();
-
-        let mut commitment_multi = MSMKZG::<E>::new();
-        let mut eval_multi = E::Fr::ZERO;
-
-        let mut witness = MSMKZG::<E>::new();
-        let mut witness_with_aux = MSMKZG::<E>::new();
-
-        for ((commitment_at_a_point, wi), power_of_u) in
-            commitment_data.iter().zip(w.into_iter()).zip(powers(u))
-        {
-            assert!(!commitment_at_a_point.queries.is_empty());
-            let z = commitment_at_a_point.point;
-
-            let (mut commitment_batch, eval_batch) = commitment_at_a_point
-                .queries
-                .iter()
-                .zip(powers(v))
-                .map(|(query, power_of_v)| {
-                    assert_eq!(query.get_point(), z);
-
-                    let mut commitment = MSMKZG::<E>::new();
-                    commitment.append_term(power_of_v, query.get_commitment().to_curve());
-
-                    let eval = power_of_v * query.get_eval();
-
-                    (commitment, eval)
-                })
-                .reduce(|(mut commitment_acc, eval_acc), (commitment, eval)| {
-                    commitment_acc.add_msm(&commitment);
-                    (commitment_acc, eval_acc + eval)
-                })
-                .unwrap();
-
-            commitment_batch.scale(power_of_u);
-            commitment_multi.add_msm(&commitment_batch);
-            eval_multi += power_of_u * eval_batch;
-
-            witness_with_aux.append_term(power_of_u * z, wi.to_curve());
-            witness.append_term(power_of_u, wi.to_curve());
+        for com_data in commitment_map.into_iter() {
+            let mut msm = MSMKZG::new();
+            msm.append_term(E::Fr::ONE, com_data.commitment.into());
+            q_coms[com_data.set_index].push(msm);
+            q_eval_sets[com_data.set_index].push(com_data.evals);
         }
 
-        let mut msm = DualMSM::new();
-
-        msm.left.add_msm(&witness);
-
-        msm.right.add_msm(&witness_with_aux);
-        msm.right.add_msm(&commitment_multi);
-        let g0 = E::G1::generator();
-        msm.right.append_term(eval_multi, -g0);
-
-        Ok(msm)
-    }
-}
-
-#[derive(Debug)]
-struct CommitmentData<F: Field, Q: Query<F>> {
-    queries: Vec<Q>,
-    point: F,
-    _marker: PhantomData<F>,
-}
-
-fn construct_intermediate_sets<F: Field, I, Q: Query<F>>(queries: I) -> Vec<CommitmentData<F, Q>>
-where
-    I: IntoIterator<Item = Q> + Clone,
-{
-    let mut point_query_map: Vec<(F, Vec<Q>)> = Vec::new();
-    for query in queries {
-        if let Some(pos) = point_query_map
+        let q_coms = q_coms
             .iter()
-            .position(|(point, _)| *point == query.get_point())
-        {
-            let (_, queries) = &mut point_query_map[pos];
-            queries.push(query);
-        } else {
-            point_query_map.push((query.get_point(), vec![query]));
-        }
-    }
+            .map(|msms| {
+                #[cfg(feature = "truncated-challenges")]
+                let powers = truncated_powers(x1);
 
-    point_query_map
-        .into_iter()
-        .map(|(point, queries)| CommitmentData {
-            queries,
-            point,
-            _marker: PhantomData,
-        })
-        .collect()
+                #[cfg(not(feature = "truncated-challenges"))]
+                let powers = powers(x1);
+
+                msm_inner_product(msms, powers)
+            })
+            .collect::<Vec<_>>();
+
+        let q_eval_sets = q_eval_sets
+            .iter()
+            .map(|evals| {
+                #[cfg(feature = "truncated-challenges")]
+                let powers = truncated_powers(x1);
+
+                #[cfg(not(feature = "truncated-challenges"))]
+                let powers = powers(x1);
+
+                evals_inner_product(evals, powers)
+            })
+            .collect::<Vec<_>>();
+
+        let f_com: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+
+        // Sample a challenge x_3 for checking that f(X) was committed to
+        // correctly.
+        let x3: E::Fr = transcript.squeeze_challenge();
+        #[cfg(feature = "truncated-challenges")]
+        let x3 = truncate(x3);
+
+        let mut q_evals_on_x3 = Vec::<E::Fr>::with_capacity(q_eval_sets.len());
+        for _ in 0..q_eval_sets.len() {
+            q_evals_on_x3.push(transcript.read().map_err(|_| Error::SamplingError)?);
+        }
+
+        // We can compute the expected msm_eval at x_3 using the u provided
+        // by the prover and from x_2
+        let f_eval = point_sets
+            .iter()
+            .zip(q_eval_sets.iter())
+            .zip(q_evals_on_x3.iter())
+            .rev()
+            .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
+                let r_poly = lagrange_interpolate(points, evals);
+                let r_eval = eval_polynomial(&r_poly, x3);
+                let eval = points.iter().fold(*proof_eval - &r_eval, |eval, point| {
+                    eval * &(x3 - point).invert().unwrap()
+                });
+                acc_eval * &(x2) + &eval
+            });
+
+        let x4: E::Fr = transcript.squeeze_challenge();
+
+        let final_com = {
+            let mut polys = q_coms;
+            let mut f_com_as_msm = MSMKZG::new();
+            f_com_as_msm.append_term(E::Fr::ONE, f_com.into());
+            polys.push(f_com_as_msm);
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            msm_inner_product(&polys, powers)
+        };
+
+        let v = {
+            let mut evals = q_evals_on_x3;
+            evals.push(f_eval);
+
+            #[cfg(feature = "truncated-challenges")]
+            let powers = truncated_powers(x4);
+
+            #[cfg(not(feature = "truncated-challenges"))]
+            let powers = powers(x4);
+
+            inner_product(&evals, powers)
+        };
+
+        let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+
+        let mut pi_msm = MSMKZG::<E>::new();
+        pi_msm.append_term(E::Fr::ONE, pi.into());
+
+        // Scale zπ
+        let mut scaled_pi = MSMKZG::<E>::new();
+        scaled_pi.append_term(x3, pi.into());
+
+        let mut msm_accumulator = DualMSM::new();
+
+        // (π, C − vG + zπ)
+        msm_accumulator.left.add_msm(&pi_msm); // π
+
+        msm_accumulator.right.add_msm(&final_com); // C
+        msm_accumulator.right.append_term(v, -E::G1::generator()); // -vG
+        msm_accumulator.right.add_msm(&scaled_pi); // zπ
+
+        Ok(msm_accumulator)
+    }
 }
 
 #[cfg(test)]
@@ -249,7 +340,7 @@ mod tests {
         let proof = create_proof::<_, CircuitTranscript<Blake2bState>>(&params);
 
         let verifier_params = params.verifier_params();
-        verify::<_, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], false);
+        verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], false);
 
         verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], true);
     }
@@ -259,7 +350,7 @@ mod tests {
         proof: &[u8],
         should_fail: bool,
     ) where
-        E::Fr: SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash>,
+        E::Fr: Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
         E::G1Affine: CurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>
             + SerdeObject
             + Hashable<T::Hash>,
@@ -293,8 +384,8 @@ mod tests {
             valid_queries
         };
 
-        let result =
-            KZGCommitmentScheme::prepare(queries, &mut transcript).map_err(|_| Error::OpeningError);
+        let result = KZGCommitmentScheme::multi_prepare(queries, &mut transcript)
+            .map_err(|_| Error::OpeningError);
 
         if should_fail {
             assert!(result.unwrap().verify(verifier_params).is_err());
@@ -305,9 +396,9 @@ mod tests {
 
     fn create_proof<E: MultiMillerLoop, T: Transcript>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
     where
-        E::Fr: WithSmallOrderMulGroup<3> + SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash>,
-        E::G1Affine: SerdeObject
-            + Hashable<T::Hash>
+        E::Fr: WithSmallOrderMulGroup<3> + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
+        E::G1Affine: Hashable<T::Hash>
+            + SerdeObject
             + Default
             + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     {
@@ -366,7 +457,7 @@ mod tests {
         ]
         .into_iter();
 
-        KZGCommitmentScheme::open(kzg_params, queries, &mut transcript).unwrap();
+        KZGCommitmentScheme::multi_open(kzg_params, queries, &mut transcript).unwrap();
 
         transcript.finalize()
     }

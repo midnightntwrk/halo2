@@ -473,13 +473,12 @@ where
         Default + SerdeObject + Hashable<State> + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::Fr: WithSmallOrderMulGroup<3>
         + FromUniformBytes<64>
-        + SerdeObject
         + Sampleable<State>
         + Hashable<State>
         + Ord,
 {
     let params: ParamsKZG<E> = ParamsKZG::unsafe_setup(k, OsRng);
-    let vk = keygen_vk(&params, &circuit).unwrap();
+    let vk = keygen_vk_with_k(&params, &circuit, k).unwrap();
     let pk = keygen_pk(vk, &circuit).unwrap();
 
     let proof = {
