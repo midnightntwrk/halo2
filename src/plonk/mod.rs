@@ -62,9 +62,8 @@ const VERSION: u8 = 0x03;
 
 impl<F, CS> VerifyingKey<F, CS>
 where
-    F: WithSmallOrderMulGroup<3> + SerdeObject + FromUniformBytes<64>,
+    F: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
     CS: PolynomialCommitmentScheme<F>,
-    CS::Commitment: SerdeObject,
 {
     /// Returns `n`
     pub fn n(&self) -> u64 {

@@ -25,7 +25,6 @@ use crate::poly::batch_invert_rational;
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::rational::Rational;
-use halo2curves::serde::SerdeObject;
 
 /// This creates a proof for the provided `circuit` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
@@ -45,11 +44,10 @@ pub fn create_proof<
     transcript: &mut T,
 ) -> Result<(), Error>
 where
-    CS::Commitment: Hashable<T::Hash> + SerdeObject,
+    CS::Commitment: Hashable<T::Hash>,
     F: WithSmallOrderMulGroup<3>
         + Sampleable<T::Hash>
         + Hashable<T::Hash>
-        + SerdeObject
         + Ord
         + FromUniformBytes<64>,
 {

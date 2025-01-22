@@ -473,7 +473,6 @@ where
         Default + SerdeObject + Hashable<State> + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::Fr: WithSmallOrderMulGroup<3>
         + FromUniformBytes<64>
-        + SerdeObject
         + Sampleable<State>
         + Hashable<State>
         + Ord,

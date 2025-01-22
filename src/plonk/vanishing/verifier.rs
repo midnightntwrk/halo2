@@ -1,7 +1,6 @@
 use std::iter;
 
 use ff::{PrimeField, WithSmallOrderMulGroup};
-use halo2curves::serde::SerdeObject;
 
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::transcript::{read_n, Hashable, Transcript};
@@ -33,7 +32,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> Argument<F, CS> {
         transcript: &mut T,
     ) -> Result<Committed<F, CS>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
     {
         let random_poly_commitment = transcript.read()?;
 
@@ -50,7 +49,7 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Committed<
         transcript: &mut T,
     ) -> Result<Constructed<F, CS>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
     {
         // Obtain a commitment to h(X) in the form of multiple pieces of degree n - 1
         let h_commitments = read_n(transcript, vk.domain.get_quotient_poly_degree())?;
@@ -69,7 +68,7 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Constructe
         transcript: &mut T,
     ) -> Result<Evaluated<F, CS>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         let h_evals = read_n(transcript, vk.domain.get_quotient_poly_degree())?;
         let random_eval = transcript.read()?;

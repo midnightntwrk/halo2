@@ -1,5 +1,4 @@
 use ff::{FromUniformBytes, WithSmallOrderMulGroup};
-use halo2curves::serde::SerdeObject;
 use std::iter;
 
 use super::{vanishing, Error, VerifyingKey};
@@ -18,10 +17,9 @@ where
     F: WithSmallOrderMulGroup<3>
         + Hashable<T::Hash>
         + Sampleable<T::Hash>
-        + SerdeObject
         + FromUniformBytes<64>
         + Ord,
-    CS::Commitment: Hashable<T::Hash> + SerdeObject,
+    CS::Commitment: Hashable<T::Hash>,
 {
     // Check that instances matches the expected number of instance columns
     for instances in instances.iter() {

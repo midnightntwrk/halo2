@@ -1,5 +1,4 @@
 use ff::{PrimeField, WithSmallOrderMulGroup};
-use halo2curves::serde::SerdeObject;
 use std::iter;
 
 use super::super::circuit::Any;
@@ -41,7 +40,7 @@ impl Argument {
         transcript: &mut T,
     ) -> Result<Committed<F, CS>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
     {
         let chunk_len = vk.cs_degree - 2;
 
@@ -63,7 +62,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
         transcript: &mut T,
     ) -> Result<CommonEvaluated<F>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         let permutation_evals = self
             .commitments
@@ -81,8 +80,8 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> Committed<F, CS> {
         transcript: &mut T,
     ) -> Result<Evaluated<F, CS>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
-        F: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
+        F: Hashable<T::Hash>,
     {
         let mut sets = vec![];
 

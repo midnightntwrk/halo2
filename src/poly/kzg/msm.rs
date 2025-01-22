@@ -6,10 +6,10 @@ use crate::poly::kzg::KZGCommitmentScheme;
 use crate::poly::Error;
 use crate::utils::arithmetic::parallelize;
 use crate::utils::arithmetic::MSM;
+use crate::utils::helpers::ProcessedSerdeObject;
 use group::prime::PrimeCurveAffine;
 use group::{Curve, Group};
 use halo2curves::msm::msm_best;
-use halo2curves::serde::SerdeObject;
 use halo2curves::{
     pairing::{Engine, MillerLoopResult, MultiMillerLoop},
     CurveAffine,
@@ -111,8 +111,7 @@ where
 
 impl<E: MultiMillerLoop> Guard<E::Fr, KZGCommitmentScheme<E>> for DualMSM<E>
 where
-    E::Fr: SerdeObject,
-    E::G1Affine: Default + SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
 {
     fn verify(
         self,

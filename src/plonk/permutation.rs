@@ -95,7 +95,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
 
     pub(crate) fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()>
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         for commitment in &self.commitments {
             commitment.write(writer, format)?;
@@ -109,7 +109,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
         format: SerdeFormat,
     ) -> io::Result<Self>
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         let commitments = (0..argument.columns.len())
             .map(|_| CS::Commitment::read(reader, format))
@@ -119,7 +119,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
 
     pub(crate) fn bytes_length(&self, format: SerdeFormat) -> usize
     where
-        CS::Commitment: SerdeObject,
+        CS::Commitment: ProcessedSerdeObject,
     {
         self.commitments.len() * byte_length::<CS::Commitment>(format)
     }

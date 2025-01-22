@@ -5,6 +5,8 @@ use blake2b_simd::{Params, State as Blake2bState};
 use ff::{FromUniformBytes, PrimeField};
 use group::GroupEncoding;
 use halo2curves::bn256::{Fr, G1Affine};
+use std::io;
+use std::io::Read;
 
 impl TranscriptHash for Blake2bState {
     type Input = Vec<u8>;
@@ -35,13 +37,41 @@ impl TranscriptHash for Blake2bState {
 impl Hashable<Blake2bState> for G1Affine {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
-        self.to_bytes().as_ref().to_vec()
+        Hashable::to_bytes(self)
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        <Self as GroupEncoding>::to_bytes(self).as_ref().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as GroupEncoding>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_bytes(&bytes)).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "Invalid BN point encoding in proof")
+        })
     }
 }
 
 impl Hashable<Blake2bState> for Fr {
     fn to_input(&self) -> Vec<u8> {
         self.to_bytes().to_vec()
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_bytes().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as PrimeField>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_repr(bytes)).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "Invalid BN scalar encoding in proof")
+        })
     }
 }
 
@@ -61,13 +91,47 @@ impl Sampleable<Blake2bState> for Fr {
 impl Hashable<Blake2bState> for blstrs::G1Affine {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
-        self.to_bytes().as_ref().to_vec()
+        Hashable::to_bytes(self)
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        <Self as GroupEncoding>::to_bytes(self).as_ref().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as GroupEncoding>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_bytes(&bytes)).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Invalid BLS12-381 point encoding in proof",
+            )
+        })
     }
 }
 
 impl Hashable<Blake2bState> for blstrs::Scalar {
     fn to_input(&self) -> Vec<u8> {
         self.to_repr().to_vec()
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_repr().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as PrimeField>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_repr(bytes)).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Invalid BLS12-381 scalar encoding in proof",
+            )
+        })
     }
 }
 
@@ -84,13 +148,47 @@ impl Sampleable<Blake2bState> for blstrs::Scalar {
 impl Hashable<Blake2bState> for halo2curves::bls12381::G1Affine {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
-        self.to_bytes().as_ref().to_vec()
+        Hashable::to_bytes(self)
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        <Self as GroupEncoding>::to_bytes(self).as_ref().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as GroupEncoding>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_bytes(&bytes)).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Invalid BLS12-381 point encoding in proof",
+            )
+        })
     }
 }
 
 impl Hashable<Blake2bState> for halo2curves::bls12381::Fr {
     fn to_input(&self) -> Vec<u8> {
         self.to_repr().as_ref().to_vec()
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        self.to_bytes().to_vec()
+    }
+
+    fn read(buffer: &mut impl Read) -> io::Result<Self> {
+        let mut bytes = <Self as PrimeField>::Repr::default();
+
+        buffer.read_exact(bytes.as_mut())?;
+
+        Option::from(Self::from_repr(bytes)).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                "Invalid BLS12-381 scalar encoding in proof",
+            )
+        })
     }
 }
 

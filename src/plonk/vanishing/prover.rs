@@ -1,7 +1,6 @@
 use std::{collections::HashMap, iter};
 
 use ff::{PrimeField, WithSmallOrderMulGroup};
-use halo2curves::serde::SerdeObject;
 use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 
@@ -38,8 +37,8 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Argument<F
         transcript: &mut T,
     ) -> Result<Committed<F>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
-        F: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
+        F: Hashable<T::Hash>,
     {
         // Sample a random polynomial of degree n - 1
         let n = 1usize << domain.k() as usize;
@@ -88,8 +87,8 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
         transcript: &mut T,
     ) -> Result<Constructed<F>, Error>
     where
-        CS::Commitment: Hashable<T::Hash> + SerdeObject,
-        F: Hashable<T::Hash> + SerdeObject,
+        CS::Commitment: Hashable<T::Hash>,
+        F: Hashable<T::Hash>,
     {
         // Divide by t(X) = X^{params.n} - 1.
         let h_poly = domain.divide_by_vanishing_poly(h_poly);
@@ -129,7 +128,7 @@ impl<F: PrimeField> Constructed<F> {
         transcript: &mut T,
     ) -> Result<Evaluated<F>, Error>
     where
-        F: Hashable<T::Hash> + SerdeObject,
+        F: Hashable<T::Hash>,
     {
         self.h_pieces.iter().try_for_each(|p| {
             let eval = eval_polynomial(p, x);

@@ -32,11 +32,11 @@ use crate::utils::arithmetic::{truncate, truncated_powers};
 use crate::poly::commitment::{Params, PolynomialCommitmentScheme};
 use crate::poly::kzg::utils::construct_intermediate_sets;
 use crate::transcript::{Hashable, Sampleable, Transcript};
+use crate::utils::helpers::ProcessedSerdeObject;
 use ff::Field;
 use group::Group;
 use halo2curves::msm::msm_best;
 use halo2curves::pairing::MultiMillerLoop;
-use halo2curves::serde::SerdeObject;
 use halo2curves::CurveAffine;
 use rand_core::OsRng;
 
@@ -48,8 +48,7 @@ pub struct KZGCommitmentScheme<E: Engine> {
 
 impl<E: MultiMillerLoop> PolynomialCommitmentScheme<E::Fr> for KZGCommitmentScheme<E>
 where
-    E::Fr: SerdeObject,
-    E::G1Affine: Default + SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
 {
     type Parameters = ParamsKZG<E>;
     type VerifierParameters = ParamsVerifierKZG<E>;
@@ -351,7 +350,7 @@ mod tests {
         proof: &[u8],
         should_fail: bool,
     ) where
-        E::Fr: SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
+        E::Fr: Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
         E::G1Affine: CurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>
             + SerdeObject
             + Hashable<T::Hash>,
@@ -397,10 +396,9 @@ mod tests {
 
     fn create_proof<E: MultiMillerLoop, T: Transcript>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
     where
-        E::Fr:
-            WithSmallOrderMulGroup<3> + SerdeObject + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
-        E::G1Affine: SerdeObject
-            + Hashable<T::Hash>
+        E::Fr: WithSmallOrderMulGroup<3> + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
+        E::G1Affine: Hashable<T::Hash>
+            + SerdeObject
             + Default
             + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     {
