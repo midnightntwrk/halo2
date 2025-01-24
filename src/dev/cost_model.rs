@@ -1,11 +1,20 @@
 //! The cost estimator takes high-level parameters for a circuit design, and estimates the
 //! verification cost, as well as resulting proof size.
 
-use std::collections::HashSet;
+use blake2b_simd::blake2b;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::{iter, num::ParseIntError, str::FromStr};
 
+use crate::circuit;
+use crate::circuit::Value;
+use crate::plonk::sealed::SealedPhase;
 use crate::plonk::Any::Fixed;
-use crate::plonk::{k_from_circuit, Circuit};
+use crate::plonk::{
+    k_from_circuit, permutation, sealed, Advice, Any, Assignment, Challenge, Circuit, Column,
+    ConstraintSystem, Error, FirstPhase, FloorPlanner, Instance, Phase, Selector,
+};
+use crate::utils::rational::Rational;
 use ff::{Field, FromUniformBytes};
 use serde::Deserialize;
 use serde_derive::Serialize;
@@ -240,10 +249,10 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
 ) -> CostOptions {
     let instance_len = instances.iter().map(Vec::len).max().unwrap_or(0);
     let prover = if let Some(k) = k_upper_bound {
-        MockProver::run(k, circuit, instances).unwrap()
+        DevAssembly::run(k, circuit, instances).unwrap()
     } else {
         let k = k_from_circuit(circuit);
-        MockProver::run(k, circuit, instances).unwrap()
+        DevAssembly::run(k, circuit, instances).unwrap()
     };
 
     let cs = prover.cs;
@@ -340,5 +349,381 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         rows_count,
         table_rows_count,
         compressed_rows_count,
+    }
+}
+
+struct DevAssembly<F: Field> {
+    k: u32,
+    cs: ConstraintSystem<F>,
+
+    /// The regions in the circuit.
+    regions: Vec<Region>,
+    /// The current region being assigned to. Will be `None` after the circuit has been
+    /// synthesized.
+    current_region: Option<Region>,
+
+    // The fixed cells in the circuit, arranged as [column][row].
+    fixed: Vec<Vec<CellValue<F>>>,
+    // The advice cells in the circuit, arranged as [column][row].
+    _advice: Vec<Vec<CellValue<F>>>,
+    // The instance cells in the circuit, arranged as [column][row].
+    instance: Vec<Vec<InstanceValue<F>>>,
+
+    selectors: Vec<Vec<bool>>,
+
+    _challenges: Vec<F>,
+
+    permutation: permutation::keygen::Assembly,
+
+    // A range of available rows for assignment and copies.
+    usable_rows: Range<usize>,
+
+    current_phase: sealed::Phase,
+}
+
+impl<F: FromUniformBytes<64> + Ord> DevAssembly<F> {
+    /// Runs a synthetic keygen-and-prove operation on the given circuit, collecting data
+    /// about the constraints and their assignments.
+    pub fn run<ConcreteCircuit: Circuit<F>>(
+        k: u32,
+        circuit: &ConcreteCircuit,
+        instance: Vec<Vec<F>>,
+    ) -> Result<Self, Error> {
+        let n = 1 << k;
+
+        let mut cs = ConstraintSystem::default();
+        #[cfg(feature = "circuit-params")]
+        let config = ConcreteCircuit::configure_with_params(&mut cs, circuit.params());
+        #[cfg(not(feature = "circuit-params"))]
+        let config = ConcreteCircuit::configure(&mut cs);
+        let cs = cs;
+
+        assert!(
+            n >= cs.minimum_rows(),
+            "n={}, minimum_rows={}, k={}",
+            n,
+            cs.minimum_rows(),
+            k,
+        );
+
+        assert_eq!(instance.len(), cs.num_instance_columns);
+
+        let instance = instance
+            .into_iter()
+            .map(|instance| {
+                assert!(
+                    instance.len() <= n - (cs.blinding_factors() + 1),
+                    "instance.len={}, n={}, cs.blinding_factors={}",
+                    instance.len(),
+                    n,
+                    cs.blinding_factors()
+                );
+
+                let mut instance_values = vec![InstanceValue::Padding; n];
+                for (idx, value) in instance.into_iter().enumerate() {
+                    instance_values[idx] = InstanceValue::Assigned(value);
+                }
+
+                instance_values
+            })
+            .collect::<Vec<_>>();
+
+        // Fixed columns contain no blinding factors.
+        let fixed = vec![vec![CellValue::Unassigned; n]; cs.num_fixed_columns];
+        let selectors = vec![vec![false; n]; cs.num_selectors];
+        // Advice columns contain blinding factors.
+        let blinding_factors = cs.blinding_factors();
+        let usable_rows = n - (blinding_factors + 1);
+        let _advice = vec![
+            {
+                let mut column = vec![CellValue::Unassigned; n];
+                // Poison unusable rows.
+                for (i, cell) in column.iter_mut().enumerate().skip(usable_rows) {
+                    *cell = CellValue::Poison(i);
+                }
+                column
+            };
+            cs.num_advice_columns
+        ];
+        let permutation = permutation::keygen::Assembly::new(n, &cs.permutation);
+        let constants = cs.constants.clone();
+
+        // Use hash chain to derive deterministic challenges for testing
+        let _challenges = {
+            let mut hash: [u8; 64] = blake2b(b"CostModel").as_bytes().try_into().unwrap();
+            iter::repeat_with(|| {
+                hash = blake2b(&hash).as_bytes().try_into().unwrap();
+                F::from_uniform_bytes(&hash)
+            })
+            .take(cs.num_challenges)
+            .collect()
+        };
+
+        let mut prover = DevAssembly {
+            k,
+            cs,
+            regions: vec![],
+            current_region: None,
+            fixed,
+            _advice,
+            instance,
+            selectors,
+            _challenges,
+            permutation,
+            usable_rows: 0..usable_rows,
+            current_phase: FirstPhase.to_sealed(),
+        };
+
+        for current_phase in prover.cs.phases() {
+            prover.current_phase = current_phase;
+            ConcreteCircuit::FloorPlanner::synthesize(
+                &mut prover,
+                circuit,
+                config.clone(),
+                constants.clone(),
+            )?;
+        }
+
+        let (cs, selector_polys) = prover
+            .cs
+            .directly_convert_selectors_to_fixed(prover.selectors.clone());
+        prover.cs = cs;
+        prover.fixed.extend(selector_polys.into_iter().map(|poly| {
+            let mut v = vec![CellValue::Unassigned; n];
+            for (v, p) in v.iter_mut().zip(&poly[..]) {
+                *v = CellValue::Assigned(*p);
+            }
+            v
+        }));
+
+        Ok(prover)
+    }
+}
+
+impl<F: Field> DevAssembly<F> {
+    fn in_phase<P: Phase>(&self, phase: P) -> bool {
+        self.current_phase == phase.to_sealed()
+    }
+}
+
+impl<F: Field> Assignment<F> for DevAssembly<F> {
+    fn enter_region<NR, N>(&mut self, name: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        if !self.in_phase(FirstPhase) {
+            return;
+        }
+
+        assert!(self.current_region.is_none());
+        self.current_region = Some(Region {
+            name: name().into(),
+            columns: HashSet::default(),
+            rows: None,
+            annotations: HashMap::default(),
+            enabled_selectors: HashMap::default(),
+            cells: HashMap::default(),
+        });
+    }
+
+    fn annotate_column<A, AR>(&mut self, _annotation: A, _column: Column<Any>)
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        // Do nothing
+    }
+
+    fn exit_region(&mut self) {
+        if !self.in_phase(FirstPhase) {
+            return;
+        }
+
+        self.regions.push(self.current_region.take().unwrap());
+    }
+
+    fn enable_selector<A, AR>(&mut self, _: A, selector: &Selector, row: usize) -> Result<(), Error>
+    where
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        if !self.usable_rows.contains(&row) {
+            return Err(Error::not_enough_rows_available(self.k));
+        }
+
+        // Track that this selector was enabled. We require that all selectors are enabled
+        // inside some region (i.e. no floating selectors).
+        self.current_region
+            .as_mut()
+            .unwrap()
+            .enabled_selectors
+            .entry(*selector)
+            .or_default()
+            .push(row);
+
+        self.selectors[selector.0][row] = true;
+
+        Ok(())
+    }
+
+    fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}, k={}",
+            row,
+            self.usable_rows,
+            self.k,
+        );
+
+        Ok(self
+            .instance
+            .get(column.index())
+            .and_then(|column| column.get(row))
+            .map(|v| circuit::Value::known(v.value()))
+            .expect("bound failure"))
+    }
+
+    fn assign_advice<V, VR, A, AR>(
+        &mut self,
+        _: A,
+        column: Column<Advice>,
+        row: usize,
+        _to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> circuit::Value<VR>,
+        VR: Into<Rational<F>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        if self.in_phase(FirstPhase) {
+            assert!(
+                self.usable_rows.contains(&row),
+                "row={}, usable_rows={:?}, k={}",
+                row,
+                self.usable_rows,
+                self.k,
+            );
+
+            if let Some(region) = self.current_region.as_mut() {
+                region.update_extent(column.into(), row);
+                region
+                    .cells
+                    .entry((column.into(), row))
+                    .and_modify(|count| *count += 1)
+                    .or_default();
+            }
+        }
+
+        Ok(())
+    }
+
+    fn assign_fixed<V, VR, A, AR>(
+        &mut self,
+        _: A,
+        column: Column<crate::plonk::Fixed>,
+        row: usize,
+        to: V,
+    ) -> Result<(), Error>
+    where
+        V: FnOnce() -> circuit::Value<VR>,
+        VR: Into<Rational<F>>,
+        A: FnOnce() -> AR,
+        AR: Into<String>,
+    {
+        if !self.in_phase(FirstPhase) {
+            return Ok(());
+        }
+
+        assert!(
+            self.usable_rows.contains(&row),
+            "row={}, usable_rows={:?}, k={}",
+            row,
+            self.usable_rows,
+            self.k,
+        );
+
+        if let Some(region) = self.current_region.as_mut() {
+            region.update_extent(column.into(), row);
+            region
+                .cells
+                .entry((column.into(), row))
+                .and_modify(|count| *count += 1)
+                .or_default();
+        }
+
+        *self
+            .fixed
+            .get_mut(column.index())
+            .and_then(|v| v.get_mut(row))
+            .expect("bounds failure") = CellValue::Assigned(to().into_field().evaluate().assign()?);
+
+        Ok(())
+    }
+
+    fn copy(
+        &mut self,
+        left_column: Column<Any>,
+        left_row: usize,
+        right_column: Column<Any>,
+        right_row: usize,
+    ) -> Result<(), crate::plonk::Error> {
+        if !self.in_phase(FirstPhase) {
+            return Ok(());
+        }
+
+        assert!(
+            self.usable_rows.contains(&left_row) && self.usable_rows.contains(&right_row),
+            "left_row={}, right_row={}, usable_rows={:?}, k={}",
+            left_row,
+            right_row,
+            self.usable_rows,
+            self.k,
+        );
+
+        self.permutation
+            .copy(left_column, left_row, right_column, right_row)
+    }
+
+    fn fill_from_row(
+        &mut self,
+        col: Column<crate::plonk::Fixed>,
+        from_row: usize,
+        to: circuit::Value<Rational<F>>,
+    ) -> Result<(), Error> {
+        if !self.in_phase(FirstPhase) {
+            return Ok(());
+        }
+
+        assert!(
+            self.usable_rows.contains(&from_row),
+            "row={}, usable_rows={:?}, k={}",
+            from_row,
+            self.usable_rows,
+            self.k,
+        );
+
+        for row in self.usable_rows.clone().skip(from_row) {
+            self.assign_fixed(|| "", col, row, || to)?;
+        }
+
+        Ok(())
+    }
+
+    fn get_challenge(&self, _challenge: Challenge) -> circuit::Value<F> {
+        Value::unknown()
+    }
+
+    fn push_namespace<NR, N>(&mut self, _: N)
+    where
+        NR: Into<String>,
+        N: FnOnce() -> NR,
+    {
+        // Do nothing; we don't care about namespaces in this context.
+    }
+
+    fn pop_namespace(&mut self, _: Option<String>) {
+        // Do nothing; we don't care about namespaces in this context.
     }
 }
