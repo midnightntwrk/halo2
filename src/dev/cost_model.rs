@@ -10,18 +10,7 @@ use ff::{Field, FromUniformBytes};
 use serde::Deserialize;
 use serde_derive::Serialize;
 
-use super::MockProver;
-
-/// Supported commitment schemes
-#[derive(Debug, Eq, PartialEq)]
-pub enum CommitmentScheme {
-    /// Inner Product Argument commitment scheme
-    IPA,
-    /// KZG with GWC19 mutli-open strategy
-    KZGGWC,
-    /// KZG with BDFG20 mutli-open strategy
-    KZGSHPLONK,
-}
+use super::{CellValue, InstanceValue, Region};
 
 /// Options to build a circuit specification to measure the cost model of.
 #[derive(Debug)]
@@ -130,7 +119,7 @@ impl Permutation {
 
 /// High-level specifications of an abstract circuit.
 #[derive(Debug, Deserialize, Serialize)]
-pub struct ModelCircuit {
+pub struct CircuitModel {
     /// Power-of-2 bound on the number of rows in the circuit.
     pub k: usize,
     /// Number of rows in the circuit (not including table rows).
@@ -154,12 +143,9 @@ pub struct ModelCircuit {
 }
 
 impl CostOptions {
-    /// Convert [CostOptions] to [ModelCircuit]. The proof sizè is computed depending on the base
+    /// Convert [CostOptions] to [CircuitModel]. The proof sizè is computed depending on the base
     /// and scalar field size of the curve used, together with the [CommitmentScheme].
-    pub fn into_model_circuit<const COMM: usize, const SCALAR: usize>(
-        &self,
-        comm_scheme: CommitmentScheme,
-    ) -> ModelCircuit {
+    pub fn into_circuit_model<const COMM: usize, const SCALAR: usize>(&self) -> CircuitModel {
         let mut queries: Vec<_> = iter::empty()
             .chain(self.advice.iter())
             .chain(self.instance.iter())
@@ -198,41 +184,24 @@ impl CostOptions {
         // - SCALAR bytes (evals) per set of points in multiopen argument
         let multiopen = comp_bytes(1, point_sets);
 
-        let polycomm = match comm_scheme {
-            CommitmentScheme::IPA => {
-                // Polycommit IPA:
-                // - s_poly commitment (COMM bytes)
-                // - inner product argument (k rounds * 2 * COMM bytes)
-                // - a (SCALAR bytes)
-                // - xi (SCALAR bytes)
-                comp_bytes(1 + 2 * self.min_k, 2)
-            }
-            CommitmentScheme::KZGGWC => {
-                let mut nr_rotations = HashSet::new();
-                for poly in self.advice.iter() {
-                    nr_rotations.extend(poly.rotations.clone());
-                }
-                for poly in self.fixed.iter() {
-                    nr_rotations.extend(poly.rotations.clone());
-                }
-                for poly in self.instance.iter() {
-                    nr_rotations.extend(poly.rotations.clone());
-                }
+        let mut nr_rotations = HashSet::new();
+        for poly in self.advice.iter() {
+            nr_rotations.extend(poly.rotations.clone());
+        }
+        for poly in self.fixed.iter() {
+            nr_rotations.extend(poly.rotations.clone());
+        }
+        for poly in self.instance.iter() {
+            nr_rotations.extend(poly.rotations.clone());
+        }
 
-                // Polycommit GWC:
-                // - number_rotations * COMM bytes
-                comp_bytes(nr_rotations.len(), 0)
-            }
-            CommitmentScheme::KZGSHPLONK => {
-                // Polycommit SHPLONK:
-                // - quotient polynomial commitment (COMM bytes)
-                comp_bytes(1, 0)
-            }
-        };
+        // Polycommit GWC:
+        // - number_rotations * COMM bytes
+        let polycomm = comp_bytes(nr_rotations.len(), 0);
 
         let size = plonk + vanishing + multiopen + polycomm;
 
-        ModelCircuit {
+        CircuitModel {
             k: self.min_k,
             rows: self.rows_count,
             table_rows: self.table_rows_count,
@@ -247,8 +216,8 @@ impl CostOptions {
     }
 }
 
-/// Given a Plonk circuit, this function returns a [ModelCircuit]
-pub fn from_circuit_to_model_circuit<
+/// Given a Plonk circuit, this function returns a [CircuitModel]
+pub fn from_circuit_to_circuit_model<
     F: Ord + Field + FromUniformBytes<64>,
     C: Circuit<F>,
     const COMM: usize,
@@ -257,10 +226,9 @@ pub fn from_circuit_to_model_circuit<
     k: Option<u32>,
     circuit: &C,
     instances: Vec<Vec<F>>,
-    comm_scheme: CommitmentScheme,
-) -> ModelCircuit {
+) -> CircuitModel {
     let options = from_circuit_to_cost_model_options(k, circuit, instances);
-    options.into_model_circuit::<COMM, SCALAR>(comm_scheme)
+    options.into_circuit_model::<COMM, SCALAR>()
 }
 
 /// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
@@ -368,7 +336,7 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         max_degree: cs.degree(),
         lookup,
         permutation,
-        min_k,
+        min_k: (min_k - 1).next_power_of_two().ilog2() as usize,
         rows_count,
         table_rows_count,
         compressed_rows_count,
