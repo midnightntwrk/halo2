@@ -19,7 +19,7 @@ use ff::{Field, FromUniformBytes};
 use serde::Deserialize;
 use serde_derive::Serialize;
 
-use super::{CellValue, InstanceValue, Region};
+use super::{CellValue, Region};
 
 /// Options to build a circuit specification to measure the cost model of.
 #[derive(Debug)]
@@ -234,9 +234,9 @@ pub fn from_circuit_to_circuit_model<
 >(
     k: Option<u32>,
     circuit: &C,
-    instances: Vec<Vec<F>>,
+    nb_instances: usize,
 ) -> CircuitModel {
-    let options = from_circuit_to_cost_model_options(k, circuit, instances);
+    let options = from_circuit_to_cost_model_options(k, circuit, nb_instances);
     options.into_circuit_model::<COMM, SCALAR>()
 }
 
@@ -245,14 +245,13 @@ pub fn from_circuit_to_circuit_model<
 pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
     k_upper_bound: Option<u32>,
     circuit: &C,
-    instances: Vec<Vec<F>>,
+    nb_instances: usize,
 ) -> CostOptions {
-    let instance_len = instances.iter().map(Vec::len).max().unwrap_or(0);
     let prover = if let Some(k) = k_upper_bound {
-        DevAssembly::run(k, circuit, instances).unwrap()
+        DevAssembly::run(k, circuit).unwrap()
     } else {
         let k = k_from_circuit(circuit);
-        DevAssembly::run(k, circuit, instances).unwrap()
+        DevAssembly::run(k, circuit).unwrap()
     };
 
     let cs = prover.cs;
@@ -328,12 +327,12 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
     let min_k = [
         rows_count + cs.blinding_factors(),
         table_rows_count + cs.blinding_factors(),
-        instance_len,
+        nb_instances,
     ]
     .into_iter()
     .max()
     .unwrap();
-    if min_k == instance_len {
+    if min_k == nb_instances {
         println!("WARNING: The dominant factor in your circuit's size is the number of public inputs, which causes the verifier to perform linear work.");
     }
 
@@ -366,8 +365,6 @@ struct DevAssembly<F: Field> {
     fixed: Vec<Vec<CellValue<F>>>,
     // The advice cells in the circuit, arranged as [column][row].
     _advice: Vec<Vec<CellValue<F>>>,
-    // The instance cells in the circuit, arranged as [column][row].
-    instance: Vec<Vec<InstanceValue<F>>>,
 
     selectors: Vec<Vec<bool>>,
 
@@ -387,7 +384,6 @@ impl<F: FromUniformBytes<64> + Ord> DevAssembly<F> {
     pub fn run<ConcreteCircuit: Circuit<F>>(
         k: u32,
         circuit: &ConcreteCircuit,
-        instance: Vec<Vec<F>>,
     ) -> Result<Self, Error> {
         let n = 1 << k;
 
@@ -405,28 +401,6 @@ impl<F: FromUniformBytes<64> + Ord> DevAssembly<F> {
             cs.minimum_rows(),
             k,
         );
-
-        assert_eq!(instance.len(), cs.num_instance_columns);
-
-        let instance = instance
-            .into_iter()
-            .map(|instance| {
-                assert!(
-                    instance.len() <= n - (cs.blinding_factors() + 1),
-                    "instance.len={}, n={}, cs.blinding_factors={}",
-                    instance.len(),
-                    n,
-                    cs.blinding_factors()
-                );
-
-                let mut instance_values = vec![InstanceValue::Padding; n];
-                for (idx, value) in instance.into_iter().enumerate() {
-                    instance_values[idx] = InstanceValue::Assigned(value);
-                }
-
-                instance_values
-            })
-            .collect::<Vec<_>>();
 
         // Fixed columns contain no blinding factors.
         let fixed = vec![vec![CellValue::Unassigned; n]; cs.num_fixed_columns];
@@ -466,7 +440,6 @@ impl<F: FromUniformBytes<64> + Ord> DevAssembly<F> {
             current_region: None,
             fixed,
             _advice,
-            instance,
             selectors,
             _challenges,
             permutation,
@@ -567,21 +540,13 @@ impl<F: Field> Assignment<F> for DevAssembly<F> {
         Ok(())
     }
 
-    fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
-        assert!(
-            self.usable_rows.contains(&row),
-            "row={}, usable_rows={:?}, k={}",
-            row,
-            self.usable_rows,
-            self.k,
-        );
+    fn query_instance(&self, _column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
+        if !self.usable_rows.contains(&row) {
+            return Err(Error::not_enough_rows_available(self.k));
+        }
 
-        Ok(self
-            .instance
-            .get(column.index())
-            .and_then(|column| column.get(row))
-            .map(|v| circuit::Value::known(v.value()))
-            .expect("bound failure"))
+        // There is no instance in this context.
+        Ok(Value::unknown())
     }
 
     fn assign_advice<V, VR, A, AR>(
