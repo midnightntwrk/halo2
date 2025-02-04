@@ -5,7 +5,7 @@ use halo2_proofs::{
 };
 use halo2curves::pasta::Fp;
 
-use halo2_proofs::dev::cost_model::{from_circuit_to_model_circuit, CommitmentScheme};
+use halo2_proofs::dev::cost_model::from_circuit_to_circuit_model;
 use halo2_proofs::plonk::{Expression, Selector, TableColumn};
 use halo2_proofs::poly::Rotation;
 
@@ -88,12 +88,7 @@ const K: u32 = 11;
 fn main() {
     let circuit = TestCircuit {};
 
-    let model = from_circuit_to_model_circuit::<_, _, 32, 32>(
-        Some(K),
-        &circuit,
-        vec![],
-        CommitmentScheme::KZGGWC,
-    );
+    let model = from_circuit_to_circuit_model::<_, _, 32, 32>(Some(K), &circuit, 10);
     println!(
         "Cost of circuit with 8 bit lookup table: \n{}",
         serde_json::to_string_pretty(&model).unwrap()
