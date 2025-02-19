@@ -54,7 +54,6 @@ pub struct VerifyingKey<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
     cs_degree: usize,
     /// The representative of this `VerifyingKey` in transcripts.
     transcript_repr: F,
-    selectors: Vec<Vec<bool>>,
 }
 
 // Current version of the VK
@@ -91,13 +90,6 @@ where
         }
         self.permutation.write(writer, format)?;
 
-        // write self.selectors
-        for selector in &self.selectors {
-            // since `selector` is filled with `bool`, we pack them 8 at a time into bytes and then write
-            for bits in selector.chunks(8) {
-                writer.write_all(&[crate::utils::helpers::pack(bits)])?;
-            }
-        }
         Ok(())
     }
 
@@ -150,7 +142,6 @@ where
 
         let permutation = permutation::VerifyingKey::read(reader, &cs.permutation, format)?;
 
-        let selectors = vec![];
         // we still need to replace selectors with fixed Expressions in `cs`
         let fake_selectors = vec![vec![]; cs.num_selectors];
         let (cs, _) = cs.directly_convert_selectors_to_fixed(fake_selectors);
@@ -160,7 +151,6 @@ where
             fixed_commitments,
             permutation,
             cs,
-            selectors,
         ))
     }
 
@@ -187,15 +177,10 @@ where
 }
 
 impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
-    fn bytes_length(&self, format: SerdeFormat) -> usize {
+    /// Return the bytes_length of a VerifyingKey
+    pub fn bytes_length(&self, format: SerdeFormat) -> usize {
         10 + (self.fixed_commitments.len() * byte_length::<CS::Commitment>(format))
             + self.permutation.bytes_length(format)
-            + self.selectors.len()
-                * (self
-                    .selectors
-                    .first()
-                    .map(|selector| (selector.len() + 7) / 8)
-                    .unwrap_or(0))
     }
 
     fn from_parts(
@@ -203,7 +188,6 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
         fixed_commitments: Vec<CS::Commitment>,
         permutation: permutation::VerifyingKey<F, CS>,
         cs: ConstraintSystem<F>,
-        selectors: Vec<Vec<bool>>,
     ) -> Self
     where
         F: FromUniformBytes<64>,
@@ -219,7 +203,6 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
             cs_degree,
             // Temporary, this is not pinned.
             transcript_repr: F::ZERO,
-            selectors,
         };
 
         let mut hasher = Blake2bParams::new()
@@ -315,7 +298,7 @@ where
     }
 
     /// Gets the total number of bytes in the serialization of `self`
-    fn bytes_length(&self, format: SerdeFormat) -> usize {
+    pub fn bytes_length(&self, format: SerdeFormat) -> usize {
         self.vk.bytes_length(format)
             + 12 // bytes used for encoding the length(u32) of "l0", "l_last" & "l_active_row" polys
             + polynomial_slice_byte_length(&self.fixed_values)

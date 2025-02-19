@@ -333,7 +333,6 @@ where
         fixed_commitments,
         permutation_vk,
         cs,
-        assembly.selectors,
     ))
 }
 
