@@ -146,12 +146,7 @@ where
         let fake_selectors = vec![vec![]; cs.num_selectors];
         let (cs, _) = cs.directly_convert_selectors_to_fixed(fake_selectors);
 
-        Ok(Self::from_parts(
-            domain,
-            fixed_commitments,
-            permutation,
-            cs,
-        ))
+        Ok(Self::from_parts(domain, fixed_commitments, permutation, cs))
     }
 
     /// Writes a verifying key to a vector of bytes using [`Self::write`].
