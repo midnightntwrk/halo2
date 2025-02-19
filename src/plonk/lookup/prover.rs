@@ -13,7 +13,7 @@ use rand_core::{CryptoRng, RngCore};
 use std::{collections::BTreeMap, iter};
 
 #[derive(Debug)]
-pub(in crate::plonk) struct Permuted<F: PrimeField> {
+pub(crate) struct Permuted<F: PrimeField> {
     compressed_input_expression: Polynomial<F, LagrangeCoeff>,
     permuted_input_expression: Polynomial<F, LagrangeCoeff>,
     permuted_input_poly: Polynomial<F, Coeff>,
@@ -22,14 +22,15 @@ pub(in crate::plonk) struct Permuted<F: PrimeField> {
     permuted_table_poly: Polynomial<F, Coeff>,
 }
 
-#[derive(Debug)]
-pub(in crate::plonk) struct Committed<F: PrimeField> {
-    pub(in crate::plonk) permuted_input_poly: Polynomial<F, Coeff>,
-    pub(in crate::plonk) permuted_table_poly: Polynomial<F, Coeff>,
-    pub(in crate::plonk) product_poly: Polynomial<F, Coeff>,
+// TODO: Remove this clone
+#[derive(Clone, Debug)]
+pub(crate) struct Committed<F: PrimeField> {
+    pub(crate) permuted_input_poly: Polynomial<F, Coeff>,
+    pub(crate) permuted_table_poly: Polynomial<F, Coeff>,
+    pub(crate) product_poly: Polynomial<F, Coeff>,
 }
 
-pub(in crate::plonk) struct Evaluated<F: PrimeField> {
+pub(crate) struct Evaluated<F: PrimeField> {
     constructed: Committed<F>,
 }
 
@@ -45,7 +46,7 @@ impl<F: WithSmallOrderMulGroup<3> + Ord> Argument<F> {
     ///
     /// The Permuted<C> struct is used to update the Lookup, and is then returned.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::plonk) fn commit_permuted<
+    pub(crate) fn commit_permuted<
         'a,
         'params: 'a,
         CS: PolynomialCommitmentScheme<F>,
@@ -142,7 +143,7 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
     /// grand product polynomial over the lookup. The grand product polynomial
     /// is used to populate the Product<C> struct. The Product<C> struct is
     /// added to the Lookup and finally returned by the method.
-    pub(in crate::plonk) fn commit_product<CS: PolynomialCommitmentScheme<F>, T: Transcript>(
+    pub(crate) fn commit_product<CS: PolynomialCommitmentScheme<F>, T: Transcript>(
         self,
         pk: &ProvingKey<F, CS>,
         params: &CS::Parameters,
@@ -278,7 +279,7 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
 }
 
 impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
-    pub(in crate::plonk) fn evaluate<T: Transcript, CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn evaluate<T: Transcript, CS: PolynomialCommitmentScheme<F>>(
         self,
         pk: &ProvingKey<F, CS>,
         x: F,
@@ -313,7 +314,7 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
 }
 
 impl<F: WithSmallOrderMulGroup<3>> Evaluated<F> {
-    pub(in crate::plonk) fn open<'a, CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn open<'a, CS: PolynomialCommitmentScheme<F>>(
         &'a self,
         pk: &'a ProvingKey<F, CS>,
         x: F,

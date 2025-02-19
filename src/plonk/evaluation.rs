@@ -11,7 +11,7 @@ use group::ff::Field;
 use super::{ConstraintSystem, Expression};
 
 /// Return the index in the polynomial of size `isize` after rotation `rot`.
-fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
+pub(crate) fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
     (((idx as i32) + (rot * rot_scale)).rem_euclid(isize)) as usize
 }
 
@@ -262,7 +262,7 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
 
     /// Evaluate h poly
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::plonk) fn evaluate_h<CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn evaluate_h<CS: PolynomialCommitmentScheme<F>>(
         &self,
         pk: &ProvingKey<F, CS>,
         advice_polys: &[&[Polynomial<F, Coeff>]],
