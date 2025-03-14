@@ -186,8 +186,16 @@ impl CostOptions {
         // - 5 * SCALAR bytes per lookup argument
         let nb_perm_chunks = ((self.permutation.columns - 1) / (self.max_degree - 2)) + 1;
         let plonk = comp_bytes(1, 0) * self.advice.len()
-            + self.advice.iter().map(|polys| comp_bytes(0, polys.rotations.len())).sum::<usize>()
-            + self.fixed.iter().map(|polys| comp_bytes(0, polys.rotations.len())).sum::<usize>()
+            + self
+                .advice
+                .iter()
+                .map(|polys| comp_bytes(0, polys.rotations.len()))
+                .sum::<usize>()
+            + self
+                .fixed
+                .iter()
+                .map(|polys| comp_bytes(0, polys.rotations.len()))
+                .sum::<usize>()
             + comp_bytes(3, 5) * self.lookup.len()
             + comp_bytes(1, 3) * nb_perm_chunks
             + comp_bytes(0, 1) * self.permutation.columns;
@@ -197,8 +205,7 @@ impl CostOptions {
         // - (max_deg - 1) COMM bytes for the pieces
         // - (max_deg - 1) * SCALAR bytes for pieces eval
         // - SCALAR bytes for random piece eval
-        let vanishing =
-            comp_bytes(self.max_degree, self.max_degree);
+        let vanishing = comp_bytes(self.max_degree, self.max_degree);
 
         // Multiopening argument:
         // - COMM bytes for f_commitment
