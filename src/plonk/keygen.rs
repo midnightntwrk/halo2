@@ -259,7 +259,7 @@ where
     let k = k_from_circuit(circuit);
 
     if params.max_k() != k {
-        return Err(Error::SrsError);
+        return Err(Error::SrsError(params.max_k() as usize, k as usize));
     }
 
     keygen_vk_with_k(params, circuit, k)

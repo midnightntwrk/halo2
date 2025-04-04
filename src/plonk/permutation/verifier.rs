@@ -225,7 +225,6 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Evaluated<
         iter::empty()
             .chain(self.sets.iter().flat_map(move |set| {
                 iter::empty()
-                    // Open permutation product commitments at x and \omega^{-1} x
                     // Open permutation product commitments at x and \omega x
                     .chain(Some(VerifierQuery::new(
                         x,

@@ -33,9 +33,6 @@ struct CostOptions {
     /// A fixed column with the given rotations. May be repeated.
     fixed: Vec<Poly>,
 
-    /// Maximum degree of the custom gates.
-    gate_degree: usize,
-
     /// Maximum degree of the constraint system.
     max_degree: usize,
 
@@ -91,7 +88,7 @@ impl Lookup {
         // - input commitments at x and x_inv
         // - table commitments at x
         let product = "0,1".parse().unwrap();
-        let input = "0,-1".parse().unwrap();
+        let input = "-1,0".parse().unwrap();
         let table = "0".parse().unwrap();
 
         iter::empty()
@@ -104,25 +101,24 @@ impl Lookup {
 /// Number of permutation enabled columns
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Permutation {
+    chunk_len: usize,
     columns: usize,
+    u: isize,
 }
 
 impl Permutation {
     /// Returns the queries of the Permutation argument
     fn queries(&self) -> impl Iterator<Item = Poly> {
-        // - product commitments at x and x_inv
-        // - polynomial commitments at x
-        let product = "0,-1".parse().unwrap();
-        let poly = "0".parse().unwrap();
+        // - at wX, X, uwX for all (except the last)
+        // - at wX, X for the last
+        let mut chunks: Poly = "0,1".parse().unwrap();
+        chunks.rotations.push(self.u);
+
+        let last_chunk: Poly = "0,1".parse().unwrap();
 
         iter::empty()
-            .chain(Some(product))
-            .chain(iter::repeat(poly).take(self.columns))
-    }
-
-    /// Returns the number of columns of the Permutation argument
-    fn nr_columns(&self) -> usize {
-        self.columns
+            .chain(iter::repeat(chunks).take((self.columns - 1) / self.chunk_len))
+            .chain(Some(last_chunk))
     }
 }
 
@@ -152,12 +148,15 @@ pub struct CircuitModel {
     pub point_sets: usize,
     /// Size of the proof for the circuit
     pub size: usize,
+    /// Compressed rows count, accounting for compression (where multiple
+    /// regions can use the same rows).
+    pub compressed_rows_count: usize,
 }
 
 impl CostOptions {
     /// Convert [CostOptions] to [CircuitModel]. The proof sizè is computed depending on the base
     /// and scalar field size of the curve used, together with the [CommitmentScheme].
-    fn into_circuit_model<const COMM: usize, const SCALAR: usize>(&self) -> CircuitModel {
+    fn into_circuit_model<const COMM: usize, const SCALAR: usize>(self) -> CircuitModel {
         let mut queries: Vec<_> = iter::empty()
             .chain(self.advice.iter())
             .chain(self.instance.iter())
@@ -184,7 +183,9 @@ impl CostOptions {
         // - SCALAR bytes per fixed per query <- missing
         // - SCALAR bytes per permutation column
         // - 5 * SCALAR bytes per lookup argument
-        let nb_perm_chunks = ((self.permutation.columns - 1) / (self.max_degree - 2)) + 1;
+        let nb_perm_chunks = ((self.permutation.columns.saturating_sub(1))
+            / (self.max_degree.saturating_sub(2)))
+            + 1;
         let plonk = comp_bytes(1, 0) * self.advice.len()
             + self
                 .advice
@@ -197,7 +198,7 @@ impl CostOptions {
                 .map(|polys| comp_bytes(0, polys.rotations.len()))
                 .sum::<usize>()
             + comp_bytes(3, 5) * self.lookup.len()
-            + comp_bytes(1, 3) * nb_perm_chunks
+            + (comp_bytes(1, 3) * nb_perm_chunks).saturating_sub(comp_bytes(0, 1)) // we don't need the permutation_product_last_eval of the last chunk
             + comp_bytes(0, 1) * self.permutation.columns;
 
         // Vanishing argument:
@@ -239,6 +240,7 @@ impl CostOptions {
             column_queries,
             point_sets,
             size,
+            compressed_rows_count: self.compressed_rows_count,
         }
     }
 }
@@ -284,10 +286,11 @@ fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: 
     };
 
     let advice = {
-        // init the advice polynomials with no rotations
+        // init the advice polynomials with at least X as a rotation (always opens at least once)
         let mut advice = vec![Poly { rotations: vec![] }; cs.num_advice_columns()];
         for (col, rot) in cs.advice_queries() {
             advice[col.index()].rotations.push(rot.0 as isize);
+            advice[col.index()].rotations.sort()
         }
         advice
     };
@@ -297,6 +300,7 @@ fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: 
         let mut instance = vec![Poly { rotations: vec![] }; cs.num_instance_columns()];
         for (col, rot) in cs.instance_queries() {
             instance[col.index()].rotations.push(rot.0 as isize);
+            instance[col.index()].rotations.sort()
         }
         instance
     };
@@ -304,15 +308,10 @@ fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: 
     let lookup = { cs.lookups().iter().map(|_| Lookup).collect::<Vec<_>>() };
 
     let permutation = Permutation {
+        chunk_len: cs.degree() - 2,
         columns: cs.permutation().get_columns().len(),
+        u: -((cs.blinding_factors() + 1) as isize),
     };
-
-    let gate_degree = cs
-        .gates
-        .iter()
-        .flat_map(|gate| gate.polynomials().iter().map(|poly| poly.degree()))
-        .max()
-        .unwrap_or(0);
 
     // Note that this computation does't assume that `regions` is already in
     // order of increasing row indices.
@@ -358,7 +357,6 @@ fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: 
         advice,
         instance,
         fixed,
-        gate_degree,
         max_degree: cs.degree(),
         lookup,
         permutation,
