@@ -7,7 +7,8 @@ use crate::poly::VerifierQuery;
 use crate::transcript::{read_n, Hashable, Sampleable, Transcript};
 use crate::utils::arithmetic::compute_inner_product;
 
-/// Prepares a plonk proof into a PCS instance that can be finalized or batched.
+/// Prepares a plonk proof into a PCS instance that can be finalized or batched. It is
+/// responsibility of the verifier to check the validity of the instance columns.
 pub fn prepare<F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
     vk: &VerifyingKey<F, CS>,
     instances: &[&[&[F]]],
@@ -38,6 +39,7 @@ where
             for value in instance.iter() {
                 transcript.common(value)?;
             }
+            transcript.common(&F::from_u128(instance.len() as u128))?;
         }
     }
 

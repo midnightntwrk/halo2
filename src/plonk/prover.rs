@@ -95,6 +95,7 @@ where
                         transcript.common(value)?;
                         *poly = *value;
                     }
+                    transcript.common(&F::from_u128(values.len() as u128))?;
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
