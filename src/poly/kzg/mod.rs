@@ -292,6 +292,8 @@ where
 
         let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
 
+        transcript.check_empty().map_err(|_| Error::OpeningError)?;
+
         let mut pi_msm = MSMKZG::<E>::new();
         pi_msm.append_term(E::Fr::ONE, pi.into());
 
