@@ -205,10 +205,21 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
             .personal(b"Halo2-Verify-Key")
             .to_state();
 
-        let s = format!("{:?}", vk.pinned());
+        // We serialise the commitments of the VK to get the trascnript_repr.
+        let mut buffer = Vec::new();
+        buffer.push(VERSION);
+        let k = &vk.domain.k();
+        assert!(*k <= F::S);
+        buffer.push(*k as u8);
+        buffer.extend_from_slice(&(vk.fixed_commitments.len() as u32).to_le_bytes());
+        for commitment in &vk.fixed_commitments {
+            buffer.extend_from_slice(&commitment.to_raw_bytes())
+        }
+        for commitment in vk.permutation.commitments() {
+            buffer.extend_from_slice(&commitment.to_raw_bytes())
+        }
 
-        hasher.update(&(s.len() as u64).to_le_bytes());
-        hasher.update(s.as_bytes());
+        hasher.update(&buffer);
 
         // Hash in final Blake2bState
         vk.transcript_repr = F::from_uniform_bytes(hasher.finalize().as_array());

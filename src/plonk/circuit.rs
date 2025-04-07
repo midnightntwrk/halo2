@@ -1581,29 +1581,46 @@ pub struct PinnedConstraintSystem<'a, F: Field> {
 
 impl<'a, F: Field> std::fmt::Debug for PinnedConstraintSystem<'a, F> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let &Self {
+            num_fixed_columns,
+            num_advice_columns,
+            num_instance_columns,
+            num_selectors,
+            num_challenges,
+            advice_column_phase,
+            challenge_phase,
+            gates,
+            advice_queries,
+            instance_queries,
+            fixed_queries,
+            permutation,
+            lookups,
+            constants,
+            minimum_degree,
+        } = &self;
         let mut debug_struct = f.debug_struct("PinnedConstraintSystem");
         debug_struct
-            .field("num_fixed_columns", self.num_fixed_columns)
-            .field("num_advice_columns", self.num_advice_columns)
-            .field("num_instance_columns", self.num_instance_columns)
-            .field("num_selectors", self.num_selectors);
+            .field("num_fixed_columns", num_fixed_columns)
+            .field("num_advice_columns", num_advice_columns)
+            .field("num_instance_columns", num_instance_columns)
+            .field("num_selectors", num_selectors);
         // Only show multi-phase related fields if it's used.
-        if *self.num_challenges > 0 {
+        if *num_challenges > &0 {
             debug_struct
-                .field("num_challenges", self.num_challenges)
-                .field("advice_column_phase", self.advice_column_phase)
-                .field("challenge_phase", self.challenge_phase);
+                .field("num_challenges", num_challenges)
+                .field("advice_column_phase", advice_column_phase)
+                .field("challenge_phase", challenge_phase);
         }
         debug_struct
-            .field("gates", &self.gates)
-            .field("advice_queries", self.advice_queries)
-            .field("instance_queries", self.instance_queries)
-            .field("fixed_queries", self.fixed_queries)
-            .field("permutation", self.permutation)
-            .field("lookups", self.lookups);
+            .field("gates", &gates)
+            .field("advice_queries", advice_queries)
+            .field("instance_queries", instance_queries)
+            .field("fixed_queries", fixed_queries)
+            .field("permutation", permutation)
+            .field("lookups", lookups);
         debug_struct
-            .field("constants", self.constants)
-            .field("minimum_degree", self.minimum_degree);
+            .field("constants", constants)
+            .field("minimum_degree", minimum_degree);
         debug_struct.finish()
     }
 }
