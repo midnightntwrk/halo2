@@ -179,6 +179,10 @@ pub fn parallelize<T: Send, F: Fn(&mut [T], usize) + Send + Sync + Clone>(v: &mu
 /// are the same.
 pub fn lagrange_interpolate<F: Field>(points: &[F], evals: &[F]) -> Vec<F> {
     assert_eq!(points.len(), evals.len());
+    assert!(!points
+        .iter()
+        .enumerate()
+        .any(|(i, &item)| points.iter().skip(i + 1).any(|&x| x == item)));
     if points.len() == 1 {
         // Constant polynomial
         vec![evals[0]]
