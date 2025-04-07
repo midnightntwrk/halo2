@@ -47,13 +47,13 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
         Self::Commitment: Hashable<T::Hash>;
 
     /// Verify an multi-opening proof for a given set of [VerifierQuery]'s.
-    fn multi_prepare<T: Transcript>(
-        verifier_query: impl IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
+    fn multi_prepare<'com, T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<'com, F, Self>> + Clone,
         transcript: &mut T,
     ) -> Result<Self::VerificationGuard, Error>
     where
         F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
-        Self::Commitment: Hashable<T::Hash>;
+        Self::Commitment: 'com + Hashable<T::Hash>;
 }
 
 /// Interface for verifier finalizer

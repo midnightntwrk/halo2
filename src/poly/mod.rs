@@ -34,6 +34,8 @@ pub enum Error {
     OpeningError,
     /// Caller needs to re-sample a point
     SamplingError,
+    /// Multiopen argument only supports a single query to the same (commitment, opening) pair.
+    DuplicatedQuery,
 }
 
 /// The basis over which a polynomial is described.

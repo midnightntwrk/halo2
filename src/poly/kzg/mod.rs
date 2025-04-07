@@ -101,7 +101,7 @@ where
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        let (poly_map, point_sets) = construct_intermediate_sets(prover_query);
+        let (poly_map, point_sets) = construct_intermediate_sets(prover_query)?;
 
         let mut q_polys = vec![vec![]; point_sets.len()];
 
@@ -179,8 +179,9 @@ where
         transcript.write(&pi).map_err(|_| Error::OpeningError)
     }
 
-    fn multi_prepare<T: Transcript>(
-        verifier_query: impl IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
+    fn multi_prepare<'com, T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<'com, E::Fr, KZGCommitmentScheme<E>>>
+            + Clone,
         transcript: &mut T,
     ) -> Result<DualMSM<E>, Error>
     where
@@ -192,14 +193,14 @@ where
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query);
+        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query)?;
 
         let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
         let mut q_eval_sets = vec![vec![]; point_sets.len()];
 
         for com_data in commitment_map.into_iter() {
             let mut msm = MSMKZG::new();
-            msm.append_term(E::Fr::ONE, com_data.commitment.into());
+            msm.append_term(E::Fr::ONE, (*com_data.commitment).into());
             q_coms[com_data.set_index].push(msm);
             q_eval_sets[com_data.set_index].push(com_data.evals);
         }
@@ -369,14 +370,14 @@ mod tests {
         let cvy: E::Fr = transcript.read().unwrap();
 
         let valid_queries = std::iter::empty()
-            .chain(Some(VerifierQuery::new(x, a, avx)))
-            .chain(Some(VerifierQuery::new(x, b, bvx)))
-            .chain(Some(VerifierQuery::new(y, c, cvy)));
+            .chain(Some(VerifierQuery::new(x, &a, avx)))
+            .chain(Some(VerifierQuery::new(x, &b, bvx)))
+            .chain(Some(VerifierQuery::new(y, &c, cvy)));
 
         let invalid_queries = std::iter::empty()
-            .chain(Some(VerifierQuery::new(x, a, avx)))
-            .chain(Some(VerifierQuery::new(x, b, avx)))
-            .chain(Some(VerifierQuery::new(y, c, cvy)));
+            .chain(Some(VerifierQuery::new(x, &a, avx)))
+            .chain(Some(VerifierQuery::new(x, &b, avx)))
+            .chain(Some(VerifierQuery::new(y, &c, cvy)));
 
         let queries = if should_fail {
             invalid_queries

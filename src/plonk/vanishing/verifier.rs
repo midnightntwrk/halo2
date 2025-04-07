@@ -116,11 +116,11 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> Evaluated<F, CS> {
                 self.h_commitments
                     .iter()
                     .zip(self.h_evals.iter())
-                    .map(move |(&c, e)| VerifierQuery::new(x, c, *e)),
+                    .map(move |(c, e)| VerifierQuery::new(x, c, *e)),
             )
             .chain(Some(VerifierQuery::new(
                 x,
-                self.random_poly_commitment,
+                &self.random_poly_commitment,
                 self.random_eval,
             )))
     }

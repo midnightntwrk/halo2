@@ -276,7 +276,7 @@ where
                         move |(query_index, &(column, at))| {
                             VerifierQuery::new(
                                 vk.domain.rotate_omega(x, at),
-                                advice_commitments[column.index()],
+                                &advice_commitments[column.index()],
                                 advice_evals[query_index],
                             )
                         },
@@ -293,7 +293,7 @@ where
                 .map(|(query_index, &(column, at))| {
                     VerifierQuery::new(
                         vk.domain.rotate_omega(x, at),
-                        vk.fixed_commitments[column.index()],
+                        &vk.fixed_commitments[column.index()],
                         fixed_evals[query_index],
                     )
                 }),
