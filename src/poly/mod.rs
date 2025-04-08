@@ -277,10 +277,12 @@ impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
 
     fn mul(mut self, rhs: F) -> Polynomial<F, B> {
         if rhs == F::ZERO {
-            return Polynomial {
-                values: vec![F::ZERO; self.len()],
-                _marker: PhantomData,
-            };
+            parallelize(&mut self.values, |lhs, _| {
+                for lhs in lhs.iter_mut() {
+                    *lhs = F::ZERO;
+                }
+            });
+            return self;
         }
         if rhs == F::ONE {
             return self;
