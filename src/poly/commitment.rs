@@ -3,6 +3,7 @@ use crate::plonk::{k_from_circuit, Circuit};
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery, VerifierQuery};
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::helpers::ProcessedSerdeObject;
+use core::ops::{Add, Mul};
 use ff::{FromUniformBytes, PrimeField};
 use std::fmt::Debug;
 
@@ -14,8 +15,20 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     /// Parameters needed to verify a proof in the PCS
     type VerifierParameters;
 
+    /// Output of scalar multiplication for a Self::Commitment
+    type Output: Into<Self::Commitment>;
     /// Type of a committed polynomial
-    type Commitment: Clone + Copy + Debug + Default + PartialEq + ProcessedSerdeObject + Send + Sync;
+    type Commitment: Clone
+        + Copy
+        + Default
+        + Debug
+        + Default
+        + PartialEq
+        + ProcessedSerdeObject
+        + Send
+        + Sync
+        + Add<Output = Self::Output>
+        + Mul<F, Output = Self::Output>;
 
     /// Verification guard. Allows for batch verification
     type VerificationGuard: Guard<F, Self>;

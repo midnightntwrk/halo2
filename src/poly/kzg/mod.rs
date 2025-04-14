@@ -52,6 +52,7 @@ where
 {
     type Parameters = ParamsKZG<E>;
     type VerifierParameters = ParamsVerifierKZG<E>;
+    type Output = E::G1;
     type Commitment = E::G1Affine;
     type VerificationGuard = DualMSM<E>;
 

@@ -142,10 +142,10 @@ impl<H: TranscriptHash> Transcript for CircuitTranscript<H> {
             return Ok(());
         }
 
-        return Err(io::Error::new(
+        Err(io::Error::new(
             io::ErrorKind::NotFound,
             "Transcript has unexpected trailing bytes.",
-        ));
+        ))
     }
 }
 

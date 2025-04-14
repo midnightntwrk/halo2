@@ -25,7 +25,7 @@ pub(in crate::plonk) struct Constructed<F: PrimeField> {
 }
 
 pub(in crate::plonk) struct Evaluated<F: PrimeField> {
-    h_pieces: Vec<Polynomial<F, Coeff>>,
+    h_poly: Polynomial<F, Coeff>,
     committed: Committed<F>,
 }
 
@@ -121,25 +121,28 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
     }
 }
 
-impl<F: PrimeField> Constructed<F> {
+impl<F: WithSmallOrderMulGroup<3>> Constructed<F> {
     pub(in crate::plonk) fn evaluate<T: Transcript>(
         self,
         x: F,
+        domain: &EvaluationDomain<F>,
         transcript: &mut T,
     ) -> Result<Evaluated<F>, Error>
     where
         F: Hashable<T::Hash>,
     {
-        self.h_pieces.iter().try_for_each(|p| {
-            let eval = eval_polynomial(p, x);
-            transcript.write(&eval)
-        })?;
+        let xn: F = x.pow_vartime([domain.n]);
+        let h_poly = self
+            .h_pieces
+            .iter()
+            .rev()
+            .fold(domain.empty_coeff(), |acc, eval| acc * xn + eval);
 
         let random_eval = eval_polynomial(&self.committed.random_poly, x);
         transcript.write(&random_eval)?;
 
         Ok(Evaluated {
-            h_pieces: self.h_pieces,
+            h_poly,
             committed: self.committed,
         })
     }
@@ -148,11 +151,10 @@ impl<F: PrimeField> Constructed<F> {
 impl<F: PrimeField> Evaluated<F> {
     pub(in crate::plonk) fn open(&self, x: F) -> impl Iterator<Item = ProverQuery<'_, F>> + Clone {
         iter::empty()
-            .chain(
-                self.h_pieces
-                    .iter()
-                    .map(move |p| ProverQuery { point: x, poly: p }),
-            )
+            .chain(Some(ProverQuery {
+                point: x,
+                poly: &self.h_poly,
+            }))
             .chain(Some(ProverQuery {
                 point: x,
                 poly: &self.committed.random_poly,

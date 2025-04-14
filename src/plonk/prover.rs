@@ -515,7 +515,7 @@ where
         transcript.write(eval)?;
     }
 
-    let vanishing = vanishing.evaluate(x, transcript)?;
+    let vanishing = vanishing.evaluate(x, domain, transcript)?;
 
     // Evaluate common permutation data
     pk.permutation.evaluate(x, transcript)?;

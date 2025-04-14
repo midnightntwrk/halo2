@@ -1,8 +1,8 @@
 use crate::poly::query::Query;
+use crate::poly::Error;
 use ff::Field;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use crate::poly::Error;
 
 #[derive(Clone, Debug)]
 pub(super) struct CommitmentData<F, T: PartialEq> {
@@ -55,7 +55,7 @@ where
             .position(|comm| comm.commitment == query.get_commitment())
         {
             if commitment_map[pos].point_indices.contains(point_idx) {
-                return Err(Error::DuplicatedQuery)
+                return Err(Error::DuplicatedQuery);
             }
             commitment_map[pos].point_indices.push(*point_idx);
         } else {

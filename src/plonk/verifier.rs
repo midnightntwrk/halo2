@@ -167,7 +167,7 @@ where
         .collect::<Result<Vec<_>, _>>()?;
 
     let fixed_evals = read_n(transcript, vk.cs.fixed_queries.len())?;
-    let vanishing = vanishing.evaluate_after_x(vk, transcript)?;
+    let vanishing = vanishing.evaluate_after_x(transcript)?;
 
     let permutations_common = vk.permutation.evaluate(transcript)?;
 
@@ -263,7 +263,7 @@ where
                     ))
             });
 
-        vanishing.verify(expressions, y, xn)?
+        vanishing.verify(expressions, y, xn)
     };
 
     let queries = advice_commitments
