@@ -204,9 +204,8 @@ impl CostOptions {
         // Vanishing argument:
         // - COMM bytes for random poly
         // - (max_deg - 1) COMM bytes for the pieces
-        // - (max_deg - 1) * SCALAR bytes for pieces eval
         // - SCALAR bytes for random piece eval
-        let vanishing = comp_bytes(self.max_degree, self.max_degree);
+        let vanishing = comp_bytes(self.max_degree, 1);
 
         // Multiopening argument:
         // - COMM bytes for f_commitment
