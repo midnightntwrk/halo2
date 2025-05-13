@@ -1,6 +1,8 @@
 //! TODO
 //!
 
+mod utils;
+
 // Computes f_i(\sum_{j = 0}^k L_j(X) ω_j) for all the `evaluator` polynomials
 // `f_i` at row `row_idx`. Here, ω_j is the j-th trace, for j = 0, ..., k and
 // the lagrange polynomials `L_j(X)` are given in evaluations form (in an
@@ -10,8 +12,7 @@
 // fn eval_f_i<F>(
 //     row_idx: usize,
 //     evaluator: &Evaluator<F>,
-//     lagrange_polys: &[Polynomial<F, ExtendedLagrangeCoeff>],
-//     traces: &[&FoldingTrace<F>],
+//     lifted_trace:
 //     domain: &EvaluationDomain<F>,
 // ) -> F
 // where
