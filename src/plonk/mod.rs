@@ -37,7 +37,7 @@ pub use prover::*;
 pub use verifier::*;
 
 use crate::poly::commitment::PolynomialCommitmentScheme;
-use evaluation::Evaluator;
+pub(crate) use evaluation::Evaluator;
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use halo2curves::serde::SerdeObject;
 use std::io;
