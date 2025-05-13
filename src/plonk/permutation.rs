@@ -132,7 +132,7 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifyingKey<F, CS> {
 pub(crate) struct ProvingKey<F: PrimeField> {
     permutations: Vec<Polynomial<F, LagrangeCoeff>>,
     polys: Vec<Polynomial<F, Coeff>>,
-    pub(super) cosets: Vec<Polynomial<F, ExtendedLagrangeCoeff>>,
+    pub(crate) cosets: Vec<Polynomial<F, ExtendedLagrangeCoeff>>,
 }
 
 impl<F: WithSmallOrderMulGroup<3> + SerdeObject> ProvingKey<F> {

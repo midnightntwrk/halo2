@@ -23,10 +23,10 @@ pub(in crate::plonk) struct Permuted<F: PrimeField> {
 }
 
 #[derive(Debug)]
-pub(in crate::plonk) struct Committed<F: PrimeField> {
-    pub(in crate::plonk) permuted_input_poly: Polynomial<F, Coeff>,
-    pub(in crate::plonk) permuted_table_poly: Polynomial<F, Coeff>,
-    pub(in crate::plonk) product_poly: Polynomial<F, Coeff>,
+pub(crate) struct Committed<F: PrimeField> {
+    pub(crate) permuted_input_poly: Polynomial<F, Coeff>,
+    pub(crate) permuted_table_poly: Polynomial<F, Coeff>,
+    pub(crate) product_poly: Polynomial<F, Coeff>,
 }
 
 pub(in crate::plonk) struct Evaluated<F: PrimeField> {

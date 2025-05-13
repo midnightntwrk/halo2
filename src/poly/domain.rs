@@ -232,6 +232,24 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
+    /// This takes us from an n-length coefficient vector into a coset of the
+    /// evaluation domain, rotating by `rotation` if desired.
+    pub fn coeff_to_lagrange(
+        &self,
+        mut a: Polynomial<F, Coeff>,
+    ) -> Polynomial<F, LagrangeCoeff> {
+        assert_eq!(a.values.len(), 1 << self.k);
+
+        self.distribute_powers_zeta(&mut a.values, true);
+        a.values.resize(self.n as usize, F::ZERO);
+        best_fft(&mut a.values, self.omega, self.k);
+
+        Polynomial {
+            values: a.values,
+            _marker: PhantomData,
+        }
+    }
+
     /// This takes us from an n-length coefficient vector into a coset of the extended
     /// evaluation domain, rotating by `rotation` if desired.
     pub fn coeff_to_extended(

@@ -5,16 +5,19 @@ use std::ops::{Add, Mul};
 
 use ff::{PrimeField, WithSmallOrderMulGroup};
 
+use crate::plonk::permutation;
 use crate::{
     plonk::Evaluator,
     poly::{EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial},
 };
 
 /// ω in the protogalaxy paper.
-struct FoldingTrace<F> {
+pub(crate) struct FoldingTrace<F: PrimeField> {
     fixed_polys: Vec<Polynomial<F, LagrangeCoeff>>,
     advice_polys: Vec<Polynomial<F, LagrangeCoeff>>,
     instance_polys: Vec<Polynomial<F, LagrangeCoeff>>,
+    lookups: Vec<crate::plonk::lookup::prover::Committed<F>>,
+    permutations: permutation::prover::Committed<F>,
     challenges: Vec<F>,
     beta: F,
     gamma: F,
@@ -84,7 +87,7 @@ impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
 /// A folding trace where, instead of field elements, we have polynomials.
 /// It is represented as a vector of folding traces, where the i-th folding trace
 /// represents the evaluation of the polynomial at the i-th domain point.
-type LiftedFoldingTrace<F> = Vec<FoldingTrace<F>>;
+pub type LiftedFoldingTrace<F> = Vec<FoldingTrace<F>>;
 
 /// Computes \sum_{j = 0}^k L_j(X) ω_j, where ω_j is the j-th trace,
 /// for j = 0, ..., k and the `lagrange_polys` L_j(X) are given in evaluations

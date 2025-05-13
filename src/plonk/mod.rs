@@ -21,9 +21,9 @@ use crate::utils::SerdeFormat;
 
 mod circuit;
 mod error;
-mod evaluation;
+pub(crate) mod evaluation;
 mod keygen;
-mod lookup;
+pub(crate) mod lookup;
 pub mod permutation;
 mod vanishing;
 
