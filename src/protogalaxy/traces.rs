@@ -1,4 +1,5 @@
 //! TODO
+#![allow(dead_code)]
 
 use std::ops::{Add, Mul};
 
@@ -146,17 +147,18 @@ pub type LiftedFoldingTrace<F> = Vec<FoldingTrace<F>>;
 /// TODO: Improve the memory peak that this function leads to.
 /// We could handle each output folding trace one by one instead.
 pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
-    domain: &EvaluationDomain<F>,
+    dk_domain: &EvaluationDomain<F>,
     traces: &[FoldingTrace<F>],
 ) -> LiftedFoldingTrace<F> {
+    println!("Domain: {:?}", dk_domain);
     let lagrange_polys = (0..traces.len())
         .map(|i| {
-            let mut l = domain.empty_lagrange();
+            let mut l = dk_domain.empty_lagrange();
             l[i] = F::ONE;
             l
         })
-        .map(|p| domain.lagrange_to_coeff(p))
-        .map(|p| domain.coeff_to_extended(p))
+        .map(|p| dk_domain.lagrange_to_coeff(p))
+        .map(|p| dk_domain.coeff_to_extended(p))
         .collect::<Vec<_>>();
 
     let domain_size = lagrange_polys[0].num_coeffs();

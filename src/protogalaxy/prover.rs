@@ -1,5 +1,6 @@
 //! TODO
 //!
+#![allow(dead_code)]
 
 use crate::circuit::Value;
 use crate::plonk::{
@@ -7,9 +8,7 @@ use crate::plonk::{
     ConstraintSystem, Error, Evaluator, Fixed, FloorPlanner, Instance, ProvingKey, Selector,
 };
 use crate::poly::commitment::PolynomialCommitmentScheme;
-use crate::poly::{
-    batch_invert_rational, Basis, Coeff, EvaluationDomain, LagrangeCoeff, Polynomial, Rotation,
-};
+use crate::poly::{batch_invert_rational, Basis, EvaluationDomain, LagrangeCoeff, Polynomial, Rotation, ExtendedLagrangeCoeff};
 use crate::protogalaxy::traces::{FoldingTrace, LiftedFoldingTrace};
 use crate::transcript::Hashable;
 use crate::transcript::Sampleable;
@@ -20,9 +19,10 @@ use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use rand_core::{CryptoRng, RngCore};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ops::RangeTo;
+use crate::protogalaxy::utils::pow_vec;
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
-struct FoldingPk<F: PrimeField> {
+pub(crate) struct FoldingPk<F: PrimeField> {
     domain: EvaluationDomain<F>,
     cs: ConstraintSystem<F>,
     l0: Polynomial<F, LagrangeCoeff>,
@@ -88,16 +88,16 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F
 // TODO: We may have a problem with identities that depend on more than one row.
 // TODO: We should create a `FoldingCommonPk`, which is a structure that contains all
 // necessary data from PKs, and one can generate it from several PKs:
-fn eval_f_i<F>(
-    pk: FoldingPk<F>,
+pub(crate) fn eval_f_i<F>(
+    pk: &FoldingPk<F>,
     row_idx: usize,
     traces: &LiftedFoldingTrace<F>,
-) -> Polynomial<F, LagrangeCoeff>
+) -> Polynomial<F, ExtendedLagrangeCoeff>
 where
     F: PrimeField + WithSmallOrderMulGroup<3>,
 {
     let mut res = Vec::with_capacity(traces.len());
-    let domain = pk.domain;
+    let domain = pk.domain.clone();
     let size = domain.n;
     // let rot_scale = 1 << (domain.extended_k() - domain.k());
     let rot_scale = 1 << 0;
@@ -300,7 +300,7 @@ where
 /// parameters `params` and the proving key [`ProvingKey`] that was
 /// generated previously for the same circuit. The partial result is used to fold
 /// several proofs together.
-pub fn create_folding_trace<
+pub(crate) fn create_folding_trace<
     F,
     CS: PolynomialCommitmentScheme<F>,
     T: Transcript,
@@ -341,7 +341,6 @@ where
 
     struct InstanceSingle<F: PrimeField> {
         pub instance_values: Vec<Polynomial<F, LagrangeCoeff>>,
-        pub instance_polys: Vec<Polynomial<F, Coeff>>,
     }
 
     let instance: InstanceSingle<F> = {
@@ -361,17 +360,8 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let instance_polys: Vec<_> = instance_values
-            .iter()
-            .map(|poly| {
-                let lagrange_vec = domain.lagrange_from_vec(poly.to_vec());
-                domain.lagrange_to_coeff(lagrange_vec)
-            })
-            .collect();
-
         InstanceSingle {
             instance_values,
-            instance_polys,
         }
     };
 
@@ -694,6 +684,18 @@ where
     })
 }
 
+fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(pk: &FoldingPk<F>, dk_domain: &EvaluationDomain<F>, beta: &[F], lifted_folding_trace: &LiftedFoldingTrace<F>) -> Polynomial<F, ExtendedLagrangeCoeff> {
+    let beta_pows = pow_vec(beta);
+
+    let mut g_poly = Polynomial::init(dk_domain.extended_len());
+
+    beta_pows.iter().enumerate().for_each(|(i, beta_pow_i)| {
+        g_poly += &(eval_f_i(pk, i, lifted_folding_trace) * *beta_pow_i)
+    });
+
+    g_poly
+}
+
 #[cfg(test)]
 mod tests {
     use blstrs::{Bls12, Scalar as Fp};
@@ -701,6 +703,7 @@ mod tests {
     use rand_core::{OsRng, RngCore};
 
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
+    use crate::dev::MockProver;
     use crate::plonk::{
         keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression,
         Selector, TableColumn,
@@ -708,9 +711,10 @@ mod tests {
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
     use crate::poly::{EvaluationDomain, Rotation};
-    use crate::protogalaxy::prover::{create_folding_trace, FoldingPk};
+    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, FoldingPk};
     use crate::protogalaxy::traces::batch_traces;
     use crate::transcript::{CircuitTranscript, Transcript};
+    use crate::utils::arithmetic::eval_polynomial;
 
     #[derive(Clone, Copy)]
     struct TestCircuit {
@@ -795,15 +799,15 @@ mod tests {
 
     #[test]
     fn folding_test() {
-        let k = 11;
-        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(k, OsRng);
+        const K: u32 = 11;
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
         let mut rand_bytes = [0u8; 1 << 10];
         OsRng.fill_bytes(&mut rand_bytes);
 
         let witness_1 = rand_bytes
             .into_iter()
-            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .map(|byte| Value::known(Fp::from((byte as u64) + 1)))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -813,7 +817,7 @@ mod tests {
 
         let witness_2 = rand_bytes
             .into_iter()
-            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .map(|byte| Value::known(Fp::from((byte as u64) + 1)))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -823,41 +827,52 @@ mod tests {
 
         let witness_3 = rand_bytes
             .into_iter()
-            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .map(|byte| Value::known(Fp::from((byte as u64) + 1)))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
         let circuit3 = TestCircuit { witness: witness_3 };
 
-        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, k)
+        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, K)
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
 
+        MockProver::run(K, &circuit1, vec![]).unwrap().assert_satisfied();
         let mut transcript_1 = CircuitTranscript::init();
         let folding_trace_1 =
-            create_folding_trace(&params, &pk, &circuit1, &[&[]], OsRng, &mut transcript_1)
+            create_folding_trace(&params, &pk, &circuit1, &[], OsRng, &mut transcript_1)
                 .expect("Failed to compute the folding trace");
 
         let mut transcript_2 = CircuitTranscript::init();
         let folding_trace_2 =
-            create_folding_trace(&params, &pk, &circuit2, &[&[]], OsRng, &mut transcript_2)
+            create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
                 .expect("Failed to compute the folding trace");
 
         let mut transcript_3 = CircuitTranscript::init();
         let folding_trace_3 =
-            create_folding_trace(&params, &pk, &circuit3, &[&[]], OsRng, &mut transcript_3)
+            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
                 .expect("Failed to compute the folding trace");
 
-        let domain = EvaluationDomain::new(pk.vk.cs.degree() as u32, 3);
+        let degree = pk.vk.cs.degree() as u32;
+        let dk_domain = EvaluationDomain::new(degree, 3);
         let folding_pk = FoldingPk::from(pk);
 
         let lifted_trace = batch_traces(
-            &domain,
+            &dk_domain,
             &[folding_trace_1, folding_trace_2, folding_trace_3],
         );
 
-        let poly_k = todo!();
+        let betas = [Fp::ONE; K as usize];
+        let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
 
-        let compute_g_poly = domain.divide_by_vanishing_poly(poly_k);
+        let poly_g_coeff = dk_domain.extended_to_coeff(poly_g);
+
+        for exponent in 0..degree * 3 {
+            let res = eval_polynomial(&poly_g_coeff, dk_domain.get_omega().pow_vartime(&[exponent as u64]));
+            assert_eq!(res, Fp::ZERO);
+        }
+        // let poly_k = domain.divide_by_vanishing_poly(poly_g);
+        //
+        // domain
     }
 }
