@@ -161,12 +161,13 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
         .map(|p| dk_domain.coeff_to_extended(p))
         .collect::<Vec<_>>();
 
-    let domain_size = lagrange_polys[0].num_coeffs();
+    let dk_domain_size = lagrange_polys[0].num_coeffs();
+    let trace_domain_size = traces[0].fixed_polys[0].num_coeffs();
 
-    (0..domain_size)
+    (0..dk_domain_size)
         .map(|i| {
             let buffer = FoldingTrace::init(
-                domain_size,
+                trace_domain_size,
                 traces[0].fixed_polys.len(),
                 traces[0].advice_polys.len(),
                 traces[0].instance_polys.len(),
