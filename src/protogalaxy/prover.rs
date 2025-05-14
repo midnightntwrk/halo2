@@ -46,18 +46,18 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F
         let mut l0 = domain.empty_lagrange();
         l0[0] = F::ONE;
 
-        // Compute l_last(X) which evaluates to 1 on the first inactive row (just
-        // before the blinding factors) and 0 otherwise over the domain
-        let mut l_last = domain.empty_lagrange();
-        let n = domain.n as usize;
-        l_last[n - cs.blinding_factors() - 1] = F::ONE;
-
         // Compute l_blind(X) which evaluates to 1 for each blinding factor row
         // and 0 otherwise over the domain.
         let mut l_blind = domain.empty_lagrange();
         for evaluation in l_blind[..].iter_mut().rev().take(cs.blinding_factors()) {
             *evaluation = F::ONE;
         }
+
+        // Compute l_last(X) which evaluates to 1 on the first inactive row (just
+        // before the blinding factors) and 0 otherwise over the domain
+        let mut l_last = domain.empty_lagrange();
+        let n = domain.n as usize;
+        l_last[n - cs.blinding_factors() - 1] = F::ONE;
 
         let mut l_active_row = domain.empty_lagrange();
         parallelize(&mut l_active_row, |values, start| {
@@ -221,9 +221,9 @@ where
         // Polynomials required for this lookup.
         // Calculated here so these only have to be kept in memory for the short time
         // they are actually needed.
-        let product_coset = domain.coeff_to_extended(lookup.product_poly.clone());
-        let permuted_input_coset = domain.coeff_to_extended(lookup.permuted_input_poly.clone());
-        let permuted_table_coset = domain.coeff_to_extended(lookup.permuted_table_poly.clone());
+        let product_coset = domain.coeff_to_lagrange(lookup.product_poly.clone());
+        let permuted_input_coset = domain.coeff_to_lagrange(lookup.permuted_input_poly.clone());
+        let permuted_table_coset = domain.coeff_to_lagrange(lookup.permuted_table_poly.clone());
 
         // Lookup constraints
         let lookup_evaluator = &pk.ev.lookups[n];
@@ -683,6 +683,7 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
             .iter()
             .map(|trace| eval_f_i(pk, i, trace))
             .collect();
+        dbg!(&evals);
         g_poly += &(Polynomial {
             values: evals,
             _marker: PhantomData,
@@ -694,6 +695,8 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
 #[cfg(test)]
 mod tests {
+    use std::marker::PhantomData;
+
     use blstrs::{Bls12, Scalar as Fp};
     use ff::Field;
     use rand_core::{OsRng, RngCore};
@@ -706,8 +709,8 @@ mod tests {
     };
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
-    use crate::poly::{EvaluationDomain, Rotation};
-    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, eval_f_i, FoldingPk};
+    use crate::poly::{EvaluationDomain, Polynomial, Rotation};
+    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, FoldingPk};
     use crate::protogalaxy::traces::batch_traces;
     use crate::transcript::{CircuitTranscript, Transcript};
     use crate::utils::arithmetic::eval_polynomial;
@@ -796,7 +799,7 @@ mod tests {
     #[test]
     fn folding_test() {
         const K: u32 = 11;
-        let k = 1;
+        let k = 2;
         let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
         let mut rand_bytes = [0u8; 1 << 10];
@@ -842,10 +845,10 @@ mod tests {
             create_folding_trace(&params, &pk, &circuit1, &[], OsRng, &mut transcript_1)
                 .expect("Failed to compute the folding trace");
 
-        // let mut transcript_2 = CircuitTranscript::init();
-        // let folding_trace_2 =
-        //     create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
-        //         .expect("Failed to compute the folding trace");
+        let mut transcript_2 = CircuitTranscript::init();
+        let folding_trace_2 =
+            create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
+                .expect("Failed to compute the folding trace");
 
         // let mut transcript_3 = CircuitTranscript::init();
         // let folding_trace_3 =
@@ -856,28 +859,23 @@ mod tests {
         let dk_domain = EvaluationDomain::new(degree, k);
         let folding_pk = FoldingPk::from(pk);
 
-        let g_poly = eval_f_i(&folding_pk, 0, &folding_trace_1);
-        dbg!(g_poly);
-
         let lifted_trace = batch_traces(
             &dk_domain,
-            &[folding_trace_1], //, folding_trace_2, folding_trace_3],
+            &[folding_trace_1, folding_trace_2], //, folding_trace_3],
         );
 
         let betas = [Fp::ONE; K as usize];
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
 
-        dbg!(&poly_g);
-
         let poly_g_coeff = dk_domain.extended_to_coeff(poly_g);
 
-        // for exponent in 0..degree * k {
-        //     let res = eval_polynomial(
-        //         &poly_g_coeff,
-        //         dk_domain.get_omega().pow_vartime(&[exponent as u64]),
-        //     );
-        //     assert_eq!(res, Fp::ZERO);
-        // }
+        for exponent in 0..k {
+            let res = eval_polynomial(
+                &poly_g_coeff,
+                dk_domain.get_omega().pow_vartime(&[exponent as u64]),
+            );
+            assert_eq!(res, Fp::ZERO);
+        }
 
         // let poly_k = domain.divide_by_vanishing_poly(poly_g);
         //

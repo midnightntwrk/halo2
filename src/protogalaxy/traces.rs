@@ -150,7 +150,6 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
     dk_domain: &EvaluationDomain<F>,
     traces: &[FoldingTrace<F>],
 ) -> LiftedFoldingTrace<F> {
-    println!("Domain: {:?}", dk_domain);
     let lagrange_polys = (0..traces.len())
         .map(|i| {
             let mut l = dk_domain.empty_lagrange();

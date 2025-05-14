@@ -232,15 +232,11 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
-    /// This takes us from an n-length coefficient vector into a coset of the
-    /// evaluation domain, rotating by `rotation` if desired.
-    pub fn coeff_to_lagrange(
-        &self,
-        mut a: Polynomial<F, Coeff>,
-    ) -> Polynomial<F, LagrangeCoeff> {
+    /// This takes us from an n-length coefficient vector into the
+    /// lagrange evaluation domain.
+    pub fn coeff_to_lagrange(&self, mut a: Polynomial<F, Coeff>) -> Polynomial<F, LagrangeCoeff> {
         assert_eq!(a.values.len(), 1 << self.k);
 
-        self.distribute_powers_zeta(&mut a.values, true);
         a.values.resize(self.n as usize, F::ZERO);
         best_fft(&mut a.values, self.omega, self.k);
 
@@ -259,6 +255,22 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         assert_eq!(a.values.len(), 1 << self.k);
 
         self.distribute_powers_zeta(&mut a.values, true);
+        a.values.resize(self.extended_len(), F::ZERO);
+        best_fft(&mut a.values, self.extended_omega, self.extended_k);
+
+        Polynomial {
+            values: a.values,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Remove
+    pub fn coeff_to_extended_without_coset(
+        &self,
+        mut a: Polynomial<F, Coeff>,
+    ) -> Polynomial<F, ExtendedLagrangeCoeff> {
+        assert_eq!(a.values.len(), 1 << self.k);
+
         a.values.resize(self.extended_len(), F::ZERO);
         best_fft(&mut a.values, self.extended_omega, self.extended_k);
 
