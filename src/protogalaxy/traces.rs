@@ -172,8 +172,12 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
                 traces[0].permutation.sets.len(),
                 traces[0].challenges.len(),
             );
+            let coordinate_i_lagrange = lagrange_polys
+                .iter()
+                .map(|poly| poly[i])
+                .collect::<Vec<_>>();
 
-            linear_combination(buffer, traces, &lagrange_polys[i])
+            linear_combination(buffer, traces, &coordinate_i_lagrange)
         })
         .collect()
 }
