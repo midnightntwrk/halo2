@@ -683,7 +683,6 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
             .iter()
             .map(|trace| eval_f_i(pk, i, trace))
             .collect();
-        dbg!(&evals);
         g_poly += &(Polynomial {
             values: evals,
             _marker: PhantomData,
@@ -799,7 +798,7 @@ mod tests {
     #[test]
     fn folding_test() {
         const K: u32 = 11;
-        let k = 2;
+        let k = 3;
         let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
         let mut rand_bytes = [0u8; 1 << 10];
@@ -850,18 +849,18 @@ mod tests {
             create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
                 .expect("Failed to compute the folding trace");
 
-        // let mut transcript_3 = CircuitTranscript::init();
-        // let folding_trace_3 =
-        //     create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
-        //         .expect("Failed to compute the folding trace");
+        let mut transcript_3 = CircuitTranscript::init();
+        let folding_trace_3 =
+            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
+                .expect("Failed to compute the folding trace");
 
         let degree = pk.vk.cs.degree() as u32;
-        let dk_domain = EvaluationDomain::new(degree, (k - 1).ilog2() + 1);
+        let dk_domain = EvaluationDomain::new(degree, (k as f64 - 1.).log2() as u32 + 1);
         let folding_pk = FoldingPk::from(pk);
 
         let lifted_trace = batch_traces(
             &dk_domain,
-            &[folding_trace_1, folding_trace_2], //, folding_trace_3],
+            &[folding_trace_1, folding_trace_2, folding_trace_3],
         );
 
         let betas = [Fp::ONE; K as usize];

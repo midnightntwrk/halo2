@@ -126,6 +126,14 @@ impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
         for p in self.challenges.iter_mut() {
             *p *= scalar;
         }
+        for lhs in self.lookups.iter_mut() {
+            lhs.permuted_input_poly *= scalar;
+            lhs.permuted_table_poly *= scalar;
+            lhs.product_poly *= scalar;
+        }
+        for lhs in self.permutation.sets.iter_mut() {
+            lhs.permutation_product_poly *= scalar;
+        }
         self.beta *= scalar;
         self.gamma *= scalar;
         self.theta *= scalar;
@@ -160,8 +168,12 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
         .map(|p| dk_domain.coeff_to_extended(p))
         .collect::<Vec<_>>();
 
+    dbg!(&lagrange_polys);
+
     let dk_domain_size = lagrange_polys[0].num_coeffs();
     let trace_domain_size = traces[0].fixed_polys[0].num_coeffs();
+
+    dbg!(dk_domain_size);
 
     (0..dk_domain_size)
         .map(|i| {
@@ -176,7 +188,7 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
             );
             let coordinate_i_lagrange = lagrange_polys
                 .iter()
-                .map(|poly| poly[i])
+                .map(|poly| poly.values[i])
                 .collect::<Vec<_>>();
 
             linear_combination(buffer, traces, &coordinate_i_lagrange)

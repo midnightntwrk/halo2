@@ -65,7 +65,7 @@ where
 
     // Filter out elements whose scalar is zero.
     let (elements, scalars): (Vec<&T>, Vec<&F>) = (elements.iter())
-        .zip(scalars)
+        .zip(scalars.iter())
         .filter(|(_, s)| !s.is_zero_vartime())
         .unzip();
 
@@ -91,12 +91,20 @@ mod tests {
     #[test]
     fn test_linear_combination() {
         let to_field = |v: &[u64]| -> Vec<F> { v.iter().cloned().map(F::from).collect() };
-        let elements = vec![1, 2, 3, 4];
-        let scalars = vec![1, 10, 100, 1000];
-        let expected = 4321;
-        let buffer = F::default();
-        let result = linear_combination(buffer, &to_field(&elements), &to_field(&scalars));
-        assert_eq!(result, F::from(expected));
+        [
+            (vec![], vec![], 0),
+            (vec![7], vec![13], 91),
+            (vec![42, 7], vec![0, 13], 91),
+            (vec![1, 2], vec![1, 10], 21),
+            (vec![1, 2, 3], vec![1, 10, 100], 321),
+            (vec![1, 2, 3, 4], vec![1, 10, 100, 1000], 4321),
+        ]
+        .iter()
+        .for_each(|(elements, scalars, expected)| {
+            let buffer = F::default();
+            let result = linear_combination(buffer, &to_field(&elements), &to_field(&scalars));
+            assert_eq!(result, F::from(*expected as u64));
+        });
     }
 
     #[test]
