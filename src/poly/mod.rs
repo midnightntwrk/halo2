@@ -11,7 +11,9 @@ use halo2curves::serde::SerdeObject;
 use std::fmt::Debug;
 use std::io;
 use std::marker::PhantomData;
-use std::ops::{Add, Deref, DerefMut, Index, IndexMut, Mul, RangeFrom, RangeFull, Sub};
+use std::ops::{
+    Add, AddAssign, Deref, DerefMut, Index, IndexMut, Mul, MulAssign, RangeFrom, RangeFull, Sub,
+};
 
 mod domain;
 mod query;
@@ -61,6 +63,16 @@ impl Basis for ExtendedLagrangeCoeff {}
 pub struct Polynomial<F, B> {
     pub(crate) values: Vec<F>,
     pub(crate) _marker: PhantomData<B>,
+}
+
+impl<F: PrimeField, B> Polynomial<F, B> {
+    /// Creates a zero polynomial of the given size.
+    pub fn init(num_coeffs: usize) -> Self {
+        Polynomial {
+            values: vec![F::ZERO; num_coeffs],
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<F, B> Index<usize> for Polynomial<F, B> {
@@ -230,13 +242,18 @@ impl<F: Field, B: Basis> Add<Polynomial<F, B>> for Polynomial<F, B> {
     type Output = Polynomial<F, B>;
 
     fn add(mut self, rhs: Polynomial<F, B>) -> Polynomial<F, B> {
+        self.add_assign(&rhs);
+        self
+    }
+}
+
+impl<'a, F: Field, B: Basis> AddAssign<&'a Polynomial<F, B>> for Polynomial<F, B> {
+    fn add_assign(&mut self, rhs: &'a Polynomial<F, B>) {
         parallelize(&mut self.values, |lhs, start| {
             for (lhs, rhs) in lhs.iter_mut().zip(rhs.values[start..].iter()) {
                 *lhs += *rhs;
             }
         });
-
-        self
     }
 }
 
@@ -274,23 +291,26 @@ impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
     type Output = Polynomial<F, B>;
 
     fn mul(mut self, rhs: F) -> Polynomial<F, B> {
-        if rhs == F::ZERO {
-            return Polynomial {
-                values: vec![F::ZERO; self.len()],
-                _marker: PhantomData,
-            };
-        }
-        if rhs == F::ONE {
-            return self;
-        }
-
-        parallelize(&mut self.values, |lhs, _| {
-            for lhs in lhs.iter_mut() {
-                *lhs *= rhs;
-            }
-        });
-
+        self.mul_assign(rhs);
         self
+    }
+}
+
+impl<F: Field, B: Basis> MulAssign<F> for Polynomial<F, B> {
+    fn mul_assign(&mut self, rhs: F) {
+        if rhs == F::ZERO {
+            parallelize(&mut self.values, |lhs, _| {
+                for lhs in lhs.iter_mut() {
+                    *lhs = F::ZERO;
+                }
+            });
+        } else if rhs != F::ONE {
+            parallelize(&mut self.values, |lhs, _| {
+                for lhs in lhs.iter_mut() {
+                    *lhs *= rhs;
+                }
+            });
+        }
     }
 }
 

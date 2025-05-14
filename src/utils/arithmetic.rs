@@ -278,12 +278,12 @@ pub(crate) fn inner_product<F: PrimeField, T: Mul<F, Output = T> + Add<T, Output
         .unwrap()
 }
 
-pub(crate) fn msm_inner_product<E: Engine>(
+pub(crate) fn msm_inner_product<E>(
     msms: &[MSMKZG<E>],
     scalars: impl Iterator<Item = E::Fr>,
 ) -> MSMKZG<E>
 where
-    E: MultiMillerLoop + Debug,
+    E: Engine + MultiMillerLoop + Debug,
     E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::Fr: Ord,
 {

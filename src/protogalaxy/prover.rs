@@ -1,20 +1,25 @@
 //! TODO
 //!
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::ops::RangeTo;
-
-use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
-use rand_core::{CryptoRng, RngCore};
-
 use crate::circuit::Value;
-use crate::plonk::{Advice, Any, Assignment, Challenge, Circuit, Column, ConstraintSystem, Error, Evaluator, Fixed, FloorPlanner, Instance, lookup, permutation, ProvingKey, sealed, Selector};
-use crate::poly::{Basis, batch_invert_rational, Coeff, EvaluationDomain, LagrangeCoeff, Polynomial, Rotation};
+use crate::plonk::{
+    lookup, permutation, sealed, Advice, Any, Assignment, Challenge, Circuit, Column,
+    ConstraintSystem, Error, Evaluator, Fixed, FloorPlanner, Instance, ProvingKey, Selector,
+};
 use crate::poly::commitment::PolynomialCommitmentScheme;
+use crate::poly::{
+    batch_invert_rational, Basis, Coeff, EvaluationDomain, LagrangeCoeff, Polynomial, Rotation,
+};
 use crate::protogalaxy::traces::{FoldingTrace, LiftedFoldingTrace};
-use crate::transcript::{Hashable, Sampleable, Transcript};
+use crate::transcript::Hashable;
+use crate::transcript::Sampleable;
+use crate::transcript::Transcript;
 use crate::utils::arithmetic::parallelize;
 use crate::utils::rational::Rational;
+use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
+use rand_core::{CryptoRng, RngCore};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ops::RangeTo;
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
 struct FoldingPk<F: PrimeField> {
@@ -27,7 +32,9 @@ struct FoldingPk<F: PrimeField> {
     ev: Evaluator<F>,
 }
 
-impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> From<ProvingKey<F, CS>> for FoldingPk<F> {
+impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>>
+    From<ProvingKey<F, CS>> for FoldingPk<F>
+{
     fn from(pk: ProvingKey<F, CS>) -> Self {
         let domain = pk.vk.get_domain().clone();
         let cs = pk.vk.cs;
@@ -108,7 +115,7 @@ where
             advice_polys,
             instance_polys,
             lookups,
-            permutation: permutations,
+            permutation,
             challenges,
             beta,
             gamma,
@@ -132,12 +139,12 @@ where
         );
 
         // Permutations
-        let sets = &permutations.sets;
+        let sets = &permutation.sets;
         if !sets.is_empty() {
             let blinding_factors = pk.cs.blinding_factors();
             let last_rotation = Rotation(-((blinding_factors + 1) as i32));
             let chunk_len = pk.cs.degree() - 2;
-            let delta_start = pk.domain.g_coset * beta;
+            let delta_start = domain.g_coset * beta;
 
             let permutation_product_cosets: Vec<Polynomial<F, LagrangeCoeff>> = sets
                 .iter()
@@ -222,13 +229,9 @@ where
             // Polynomials required for this lookup.
             // Calculated here so these only have to be kept in memory for the short time
             // they are actually needed.
-            let product_coset = pk.domain.coeff_to_extended(lookup.product_poly.clone());
-            let permuted_input_coset = pk
-                .domain
-                .coeff_to_extended(lookup.permuted_input_poly.clone());
-            let permuted_table_coset = pk
-                .domain
-                .coeff_to_extended(lookup.permuted_table_poly.clone());
+            let product_coset = domain.coeff_to_extended(lookup.product_poly.clone());
+            let permuted_input_coset = domain.coeff_to_extended(lookup.permuted_input_poly.clone());
+            let permuted_table_coset = domain.coeff_to_extended(lookup.permuted_table_poly.clone());
 
             // Lookup constraints
             let lookup_evaluator = &pk.ev.lookups[n];
@@ -313,12 +316,11 @@ pub fn create_folding_trace<
 where
     CS::Commitment: Hashable<T::Hash>,
     F: WithSmallOrderMulGroup<3>
-    + Sampleable<T::Hash>
-    + Hashable<T::Hash>
-    + Ord
-    + FromUniformBytes<64>,
+        + Sampleable<T::Hash>
+        + Hashable<T::Hash>
+        + Ord
+        + FromUniformBytes<64>,
 {
-
     if instances.len() != pk.vk.cs.num_instance_columns {
         return Err(Error::InvalidInstances);
     }
@@ -343,35 +345,35 @@ where
     }
 
     let instance: InstanceSingle<F> = {
-            let instance_values = instances
-                .iter()
-                .map(|values| {
-                    let mut poly = domain.empty_lagrange();
-                    assert_eq!(poly.len(), domain.n as usize);
-                    if values.len() > (poly.len() - (meta.blinding_factors() + 1)) {
-                        return Err(Error::InstanceTooLarge);
-                    }
-                    for (poly, value) in poly.iter_mut().zip(values.iter()) {
-                        transcript.common(value)?;
-                        *poly = *value;
-                    }
-                    Ok(poly)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+        let instance_values = instances
+            .iter()
+            .map(|values| {
+                let mut poly = domain.empty_lagrange();
+                assert_eq!(poly.len(), domain.n as usize);
+                if values.len() > (poly.len() - (meta.blinding_factors() + 1)) {
+                    return Err(Error::InstanceTooLarge);
+                }
+                for (poly, value) in poly.iter_mut().zip(values.iter()) {
+                    transcript.common(value)?;
+                    *poly = *value;
+                }
+                Ok(poly)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-            let instance_polys: Vec<_> = instance_values
-                .iter()
-                .map(|poly| {
-                    let lagrange_vec = domain.lagrange_from_vec(poly.to_vec());
-                    domain.lagrange_to_coeff(lagrange_vec)
-                })
-                .collect();
+        let instance_polys: Vec<_> = instance_values
+            .iter()
+            .map(|poly| {
+                let lagrange_vec = domain.lagrange_from_vec(poly.to_vec());
+                domain.lagrange_to_coeff(lagrange_vec)
+            })
+            .collect();
 
-            InstanceSingle {
-                instance_values,
-                instance_polys,
-            }
-        };
+        InstanceSingle {
+            instance_values,
+            instance_polys,
+        }
+    };
 
     #[derive(Clone)]
     struct AdviceSingle<F: PrimeField, B: Basis> {
@@ -524,10 +526,9 @@ where
     }
 
     let (advice, challenges) = {
-        let mut advice =
-            AdviceSingle::<F, LagrangeCoeff> {
-                advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
-            };
+        let mut advice = AdviceSingle::<F, LagrangeCoeff> {
+            advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
+        };
         let mut challenges = HashMap::<usize, F>::with_capacity(meta.num_challenges);
 
         let unusable_rows_start = domain.n as usize - (meta.blinding_factors() + 1);
@@ -545,68 +546,68 @@ where
                 })
                 .collect::<BTreeSet<_>>();
 
-                let mut witness = WitnessCollection {
-                    k: domain.k(),
-                    current_phase,
-                    advice: vec![domain.empty_lagrange_rational(); meta.num_advice_columns],
-                    unblinded_advice: HashSet::from_iter(meta.unblinded_advice_columns.clone()),
-                    instances,
-                    challenges: &challenges,
-                    // The prover will not be allowed to assign values to advice
-                    // cells that exist within inactive rows, which include some
-                    // number of blinding factors and an extra row for use in the
-                    // permutation argument.
-                    usable_rows: ..unusable_rows_start,
-                    _marker: std::marker::PhantomData,
-                };
+            let mut witness = WitnessCollection {
+                k: domain.k(),
+                current_phase,
+                advice: vec![domain.empty_lagrange_rational(); meta.num_advice_columns],
+                unblinded_advice: HashSet::from_iter(meta.unblinded_advice_columns.clone()),
+                instances,
+                challenges: &challenges,
+                // The prover will not be allowed to assign values to advice
+                // cells that exist within inactive rows, which include some
+                // number of blinding factors and an extra row for use in the
+                // permutation argument.
+                usable_rows: ..unusable_rows_start,
+                _marker: std::marker::PhantomData,
+            };
 
-                // Synthesize the circuit to obtain the witness and other information.
-                ConcreteCircuit::FloorPlanner::synthesize(
-                    &mut witness,
-                    circuit,
-                    config.clone(),
-                    meta.constants.clone(),
-                )?;
+            // Synthesize the circuit to obtain the witness and other information.
+            ConcreteCircuit::FloorPlanner::synthesize(
+                &mut witness,
+                circuit,
+                config.clone(),
+                meta.constants.clone(),
+            )?;
 
-                let mut advice_values = batch_invert_rational::<F>(
-                    witness
-                        .advice
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(column_index, advice)| {
-                            if column_indices.contains(&column_index) {
-                                Some(advice)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                );
-
-                for (column_index, advice_values) in column_indices.iter().zip(&mut advice_values) {
-                    if !witness.unblinded_advice.contains(column_index) {
-                        for cell in &mut advice_values[unusable_rows_start..] {
-                            *cell = F::random(&mut rng);
+            let mut advice_values = batch_invert_rational::<F>(
+                witness
+                    .advice
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(column_index, advice)| {
+                        if column_indices.contains(&column_index) {
+                            Some(advice)
+                        } else {
+                            None
                         }
-                    } else {
-                        #[cfg(feature = "sanity-checks")]
-                        for cell in &advice_values[unusable_rows_start..] {
-                            assert_eq!(*cell, F::ZERO);
-                        }
+                    })
+                    .collect(),
+            );
+
+            for (column_index, advice_values) in column_indices.iter().zip(&mut advice_values) {
+                if !witness.unblinded_advice.contains(column_index) {
+                    for cell in &mut advice_values[unusable_rows_start..] {
+                        *cell = F::random(&mut rng);
+                    }
+                } else {
+                    #[cfg(feature = "sanity-checks")]
+                    for cell in &advice_values[unusable_rows_start..] {
+                        assert_eq!(*cell, F::ZERO);
                     }
                 }
+            }
 
-                let advice_commitments: Vec<_> = advice_values
-                    .iter()
-                    .map(|poly| CS::commit_lagrange(params, poly))
-                    .collect();
+            let advice_commitments: Vec<_> = advice_values
+                .iter()
+                .map(|poly| CS::commit_lagrange(params, poly))
+                .collect();
 
-                for commitment in &advice_commitments {
-                    transcript.write(commitment)?;
-                }
-                for (column_index, advice_values) in column_indices.iter().zip(advice_values) {
-                    advice.advice_polys[*column_index] = advice_values;
-                }
+            for commitment in &advice_commitments {
+                transcript.write(commitment)?;
+            }
+            for (column_index, advice_values) in column_indices.iter().zip(advice_values) {
+                advice.advice_polys[*column_index] = advice_values;
+            }
 
             for (index, phase) in meta.challenge_phase.iter().enumerate() {
                 if current_phase == *phase {
@@ -656,19 +657,18 @@ where
     let gamma: F = transcript.squeeze_challenge();
 
     // Commit to permutations.
-    let permutation: permutation::prover::Committed<F> =
-            pk.vk.cs.permutation.commit(
-                params,
-                pk,
-                &pk.permutation,
-                &advice.advice_polys,
-                &pk.fixed_values,
-                &instance.instance_values,
-                beta,
-                gamma,
-                &mut rng,
-                transcript,
-            )?;
+    let permutation: permutation::prover::Committed<F> = pk.vk.cs.permutation.commit(
+        params,
+        pk,
+        &pk.permutation,
+        &advice.advice_polys,
+        &pk.fixed_values,
+        &instance.instance_values,
+        beta,
+        gamma,
+        &mut rng,
+        transcript,
+    )?;
 
     let lookups: Vec<lookup::prover::Committed<F>> =
             // Construct and commit to products for each lookup
@@ -701,10 +701,13 @@ mod tests {
     use rand_core::{OsRng, RngCore};
 
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use crate::plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Expression, keygen_pk, keygen_vk_with_k, Selector, TableColumn};
-    use crate::poly::{EvaluationDomain, Rotation};
-    use crate::poly::kzg::KZGCommitmentScheme;
+    use crate::plonk::{
+        keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression,
+        Selector, TableColumn,
+    };
     use crate::poly::kzg::params::ParamsKZG;
+    use crate::poly::kzg::KZGCommitmentScheme;
+    use crate::poly::{EvaluationDomain, Rotation};
     use crate::protogalaxy::prover::{create_folding_trace, FoldingPk};
     use crate::protogalaxy::traces::batch_traces;
     use crate::transcript::{CircuitTranscript, Transcript};
@@ -729,7 +732,7 @@ mod tests {
 
         fn without_witnesses(&self) -> Self {
             Self {
-                witness: [Value::unknown(); 1 << 10]
+                witness: [Value::unknown(); 1 << 10],
             }
         }
 
@@ -750,7 +753,11 @@ mod tests {
             config
         }
 
-        fn synthesize(&self, config: MyConfig, mut layouter: impl Layouter<Fp>) -> Result<(), Error> {
+        fn synthesize(
+            &self,
+            config: MyConfig,
+            mut layouter: impl Layouter<Fp>,
+        ) -> Result<(), Error> {
             layouter.assign_table(
                 || "8-bit table",
                 |mut table| {
@@ -794,45 +801,63 @@ mod tests {
         let mut rand_bytes = [0u8; 1 << 10];
         OsRng.fill_bytes(&mut rand_bytes);
 
-        let witness_1 = rand_bytes.into_iter().map(|byte| Value::known(Fp::from(byte as u64))).collect::<Vec<_>>().try_into().unwrap();
-        let circuit1 = TestCircuit{
-            witness: witness_1
-        };
+        let witness_1 = rand_bytes
+            .into_iter()
+            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let circuit1 = TestCircuit { witness: witness_1 };
 
         OsRng.fill_bytes(&mut rand_bytes);
 
-        let witness_2 = rand_bytes.into_iter().map(|byte| Value::known(Fp::from(byte as u64))).collect::<Vec<_>>().try_into().unwrap();
-        let circuit2 = TestCircuit {
-            witness: witness_2
-        };
+        let witness_2 = rand_bytes
+            .into_iter()
+            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let circuit2 = TestCircuit { witness: witness_2 };
 
         OsRng.fill_bytes(&mut rand_bytes);
 
-        let witness_3 = rand_bytes.into_iter().map(|byte| Value::known(Fp::from(byte as u64))).collect::<Vec<_>>().try_into().unwrap();
-        let circuit3 = TestCircuit {
-            witness: witness_3
-        };
+        let witness_3 = rand_bytes
+            .into_iter()
+            .map(|byte| Value::known(Fp::from(byte as u64)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let circuit3 = TestCircuit { witness: witness_3 };
 
-        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, k).expect("keygen_vk should not fail");
+        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, k)
+            .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
 
         let mut transcript_1 = CircuitTranscript::init();
-        let folding_trace_1 = create_folding_trace(&params, &pk, &circuit1, &[&[]], OsRng, &mut transcript_1).expect("Failed to compute the folding trace");
+        let folding_trace_1 =
+            create_folding_trace(&params, &pk, &circuit1, &[&[]], OsRng, &mut transcript_1)
+                .expect("Failed to compute the folding trace");
 
         let mut transcript_2 = CircuitTranscript::init();
-        let folding_trace_2 = create_folding_trace(&params, &pk, &circuit2, &[&[]], OsRng, &mut transcript_2).expect("Failed to compute the folding trace");
+        let folding_trace_2 =
+            create_folding_trace(&params, &pk, &circuit2, &[&[]], OsRng, &mut transcript_2)
+                .expect("Failed to compute the folding trace");
 
         let mut transcript_3 = CircuitTranscript::init();
-        let folding_trace_3 = create_folding_trace(&params, &pk, &circuit3, &[&[]], OsRng, &mut transcript_3).expect("Failed to compute the folding trace");
+        let folding_trace_3 =
+            create_folding_trace(&params, &pk, &circuit3, &[&[]], OsRng, &mut transcript_3)
+                .expect("Failed to compute the folding trace");
 
+        let domain = EvaluationDomain::new(pk.vk.cs.degree() as u32, 3);
         let folding_pk = FoldingPk::from(pk);
 
-        let domain = EvaluationDomain::new(vk.cs.degree() as u32, 3);
-        let lifted_trace = batch_traces(&domain, &[&folding_trace_1, &folding_trace_2, &folding_trace_3]);
+        let lifted_trace = batch_traces(
+            &domain,
+            &[folding_trace_1, folding_trace_2, folding_trace_3],
+        );
 
         let poly_k = todo!();
 
         let compute_g_poly = domain.divide_by_vanishing_poly(poly_k);
     }
 }
-

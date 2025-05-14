@@ -3,4 +3,4 @@
 
 pub(crate) mod prover;
 pub(crate) mod traces;
-mod utils;
+pub(crate) mod utils;
