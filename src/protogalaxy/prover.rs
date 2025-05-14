@@ -856,7 +856,7 @@ mod tests {
         //         .expect("Failed to compute the folding trace");
 
         let degree = pk.vk.cs.degree() as u32;
-        let dk_domain = EvaluationDomain::new(degree, k);
+        let dk_domain = EvaluationDomain::new(degree, (k - 1).ilog2() + 1);
         let folding_pk = FoldingPk::from(pk);
 
         let lifted_trace = batch_traces(

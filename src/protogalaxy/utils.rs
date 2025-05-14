@@ -33,9 +33,8 @@ pub(crate) fn pow_vec<F: Field>(vector: &[F]) -> Vec<F> {
 // Horner's method. For that, first filter out all the elements whose
 // corresponding scalar is zero, then we need to convert the scalars into a
 // different form.
-// Concretely, let k = |elements| = |scalars| and for every i = 1..=k
-// let c_i = scalars[i-1] / scalars[i] (for this, define scalars[k] := 1),
-// also, let c_0 = 0.
+// Concretely, let k = |elements| = |scalars|. Let c_0 = 0, and scalar[k] = 1. Then,
+// for every i ∈ [1, k] let c_i = scalars[i-1] / scalars[i].
 //
 // Then we compute the linear combination as:
 // ```
