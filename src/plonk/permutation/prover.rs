@@ -27,7 +27,7 @@ pub(crate) struct Evaluated<F: PrimeField> {
 
 impl Argument {
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::plonk) fn commit<
+    pub(crate) fn commit<
         F: WithSmallOrderMulGroup<3>,
         CS: PolynomialCommitmentScheme<F>,
         R: RngCore,

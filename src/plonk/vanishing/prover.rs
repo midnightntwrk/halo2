@@ -30,7 +30,7 @@ pub(in crate::plonk) struct Evaluated<F: PrimeField> {
 }
 
 impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Argument<F, CS> {
-    pub(in crate::plonk) fn commit<R: RngCore, T: Transcript>(
+    pub(crate) fn commit<R: RngCore, T: Transcript>(
         params: &CS::Parameters,
         domain: &EvaluationDomain<F>,
         mut rng: R,

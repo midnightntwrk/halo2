@@ -13,7 +13,7 @@ use rand_core::{CryptoRng, RngCore};
 use std::{collections::BTreeMap, iter};
 
 #[derive(Debug)]
-pub(in crate::plonk) struct Permuted<F: PrimeField> {
+pub(crate) struct Permuted<F: PrimeField> {
     compressed_input_expression: Polynomial<F, LagrangeCoeff>,
     permuted_input_expression: Polynomial<F, LagrangeCoeff>,
     permuted_input_poly: Polynomial<F, Coeff>,
@@ -45,7 +45,7 @@ impl<F: WithSmallOrderMulGroup<3> + Ord> Argument<F> {
     ///
     /// The Permuted<C> struct is used to update the Lookup, and is then returned.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::plonk) fn commit_permuted<
+    pub(crate) fn commit_permuted<
         'a,
         'params: 'a,
         CS: PolynomialCommitmentScheme<F>,
@@ -142,7 +142,7 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
     /// grand product polynomial over the lookup. The grand product polynomial
     /// is used to populate the Product<C> struct. The Product<C> struct is
     /// added to the Lookup and finally returned by the method.
-    pub(in crate::plonk) fn commit_product<CS: PolynomialCommitmentScheme<F>, T: Transcript>(
+    pub(crate) fn commit_product<CS: PolynomialCommitmentScheme<F>, T: Transcript>(
         self,
         pk: &ProvingKey<F, CS>,
         params: &CS::Parameters,
