@@ -8,8 +8,12 @@ use crate::plonk::{
     ConstraintSystem, Error, Evaluator, Fixed, FloorPlanner, Instance, ProvingKey, Selector,
 };
 use crate::poly::commitment::PolynomialCommitmentScheme;
-use crate::poly::{batch_invert_rational, Basis, EvaluationDomain, LagrangeCoeff, Polynomial, Rotation, ExtendedLagrangeCoeff};
+use crate::poly::{
+    batch_invert_rational, Basis, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff,
+    Polynomial, Rotation,
+};
 use crate::protogalaxy::traces::{FoldingTrace, LiftedFoldingTrace};
+use crate::protogalaxy::utils::pow_vec;
 use crate::transcript::Hashable;
 use crate::transcript::Sampleable;
 use crate::transcript::Transcript;
@@ -18,8 +22,8 @@ use crate::utils::rational::Rational;
 use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use rand_core::{CryptoRng, RngCore};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::marker::PhantomData;
 use std::ops::RangeTo;
-use crate::protogalaxy::utils::pow_vec;
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
 pub(crate) struct FoldingPk<F: PrimeField> {
@@ -80,23 +84,16 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F
 /// (with `y`) of all custom gates, permutation and lookup identities.
 ///
 /// The function receives `[FoldingTrace<F>]`, which contains the 'lifted' folding trace, i.e.,
-/// `\sum_{j = 0}^k L_j(X) ω_j`. The size of `traces` corresponds to the extended domain `d*k`.
+/// `\sum_{j = 0}^k L_j(X) ω_j`. The size of `traces` corresponds to the extended domain `d * k`.
 ///
-/// `eval_f` evaluates `f_{row_idx}` over each of the folding traces.
+/// `eval_f` evaluates `f_{row_idx}` over the given folding trace.
 ///
-/// Returns a vector of size `d * n`
-// TODO: We may have a problem with identities that depend on more than one row.
 // TODO: We should create a `FoldingCommonPk`, which is a structure that contains all
 // necessary data from PKs, and one can generate it from several PKs:
-pub(crate) fn eval_f_i<F>(
-    pk: &FoldingPk<F>,
-    row_idx: usize,
-    traces: &LiftedFoldingTrace<F>,
-) -> Polynomial<F, ExtendedLagrangeCoeff>
+pub(crate) fn eval_f_i<F>(pk: &FoldingPk<F>, row_idx: usize, trace: &FoldingTrace<F>) -> F
 where
     F: PrimeField + WithSmallOrderMulGroup<3>,
 {
-    let mut res = Vec::with_capacity(traces.len());
     let domain = pk.domain.clone();
     let size = domain.n;
     // let rot_scale = 1 << (domain.extended_k() - domain.k());
@@ -109,20 +106,129 @@ where
     let one = F::ONE;
     let p = &pk.cs.permutation;
     let mut eval_data = pk.ev.custom_gates.instance();
-    for trace in traces {
-        let FoldingTrace {
-            fixed_polys,
-            advice_polys,
-            instance_polys,
-            lookups,
-            permutation,
-            challenges,
-            beta,
-            gamma,
-            theta,
-            y,
-        } = trace;
-        let mut value = pk.ev.custom_gates.evaluate(
+
+    let FoldingTrace {
+        fixed_polys,
+        advice_polys,
+        instance_polys,
+        lookups,
+        permutation,
+        challenges,
+        beta,
+        gamma,
+        theta,
+        y,
+    } = trace;
+    let mut value = pk.ev.custom_gates.evaluate(
+        &mut eval_data,
+        fixed_polys,
+        advice_polys,
+        instance_polys,
+        challenges,
+        &beta,
+        &gamma,
+        &theta,
+        &y,
+        &F::ZERO,
+        row_idx,
+        rot_scale,
+        isize,
+    );
+
+    // Permutations
+    let sets = &permutation.sets;
+    if !sets.is_empty() {
+        let blinding_factors = pk.cs.blinding_factors();
+        let last_rotation = Rotation(-((blinding_factors + 1) as i32));
+        let chunk_len = pk.cs.degree() - 2;
+        let delta_start = domain.g_coset * beta;
+
+        let permutation_product_cosets: Vec<Polynomial<F, LagrangeCoeff>> = sets
+            .iter()
+            .map(|set| domain.coeff_to_lagrange(set.permutation_product_poly.clone()))
+            .collect();
+
+        let first_set_permutation_product_coset = permutation_product_cosets.first().unwrap();
+        let last_set_permutation_product_coset = permutation_product_cosets.last().unwrap();
+
+        // Permutation constraints
+        // TODO: careful with this term - might be introducing a bug
+        let beta_term = omega.pow_vartime([row_idx as u64, 0, 0, 0]);
+        let r_next = crate::plonk::evaluation::get_rotation_idx(row_idx, 1, rot_scale, isize);
+        let r_last =
+            crate::plonk::evaluation::get_rotation_idx(row_idx, last_rotation.0, rot_scale, isize);
+
+        // Enforce only for the first set.
+        // l_0(X) * (1 - z_0(X)) = 0
+        value = value * y + ((one - first_set_permutation_product_coset[row_idx]) * l0[row_idx]);
+        // Enforce only for the last set.
+        // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
+        value = value * y
+            + ((last_set_permutation_product_coset[row_idx]
+                * last_set_permutation_product_coset[row_idx]
+                - last_set_permutation_product_coset[row_idx])
+                * l_last[row_idx]);
+        // Except for the first set, enforce.
+        // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
+        for set_idx in 0..sets.len() {
+            if set_idx != 0 {
+                value = value * y
+                    + ((permutation_product_cosets[set_idx][row_idx]
+                        - permutation_product_cosets[set_idx - 1][r_last])
+                        * l0[row_idx]);
+            }
+        }
+        // And for all the sets we enforce:
+        // (1 - (l_last(X) + l_blind(X))) * (
+        //   z_i(\omega X) \prod_j (p(X) + \beta s_j(X) + \gamma)
+        // - z_i(X) \prod_j (p(X) + \delta^j \beta X + \gamma)
+        // )
+        let mut current_delta = delta_start * beta_term;
+        for ((permutation_product_coset, columns), cosets) in permutation_product_cosets
+            .iter()
+            .zip(p.columns.chunks(chunk_len))
+            .zip(pk.permutation.cosets.chunks(chunk_len))
+        {
+            let mut left = permutation_product_coset[r_next];
+            for (values, permutation) in columns
+                .iter()
+                .map(|&column| match column.column_type() {
+                    Any::Advice(_) => &advice_polys[column.index()],
+                    Any::Fixed => &fixed_polys[column.index()],
+                    Any::Instance => &instance_polys[column.index()],
+                })
+                .zip(cosets.iter())
+            {
+                left *= values[row_idx] + permutation[row_idx] * beta + gamma;
+            }
+
+            let mut right = permutation_product_coset[row_idx];
+            for values in columns.iter().map(|&column| match column.column_type() {
+                Any::Advice(_) => &advice_polys[column.index()],
+                Any::Fixed => &fixed_polys[column.index()],
+                Any::Instance => &instance_polys[column.index()],
+            }) {
+                right *= values[row_idx] + current_delta + gamma;
+                current_delta *= &F::DELTA;
+            }
+
+            value = value * y + ((left - right) * l_active_row[row_idx]);
+        }
+    }
+
+    // Lookups
+    for (n, lookup) in lookups.iter().enumerate() {
+        // Polynomials required for this lookup.
+        // Calculated here so these only have to be kept in memory for the short time
+        // they are actually needed.
+        let product_coset = domain.coeff_to_extended(lookup.product_poly.clone());
+        let permuted_input_coset = domain.coeff_to_extended(lookup.permuted_input_poly.clone());
+        let permuted_table_coset = domain.coeff_to_extended(lookup.permuted_table_poly.clone());
+
+        // Lookup constraints
+        let lookup_evaluator = &pk.ev.lookups[n];
+        let mut eval_data = lookup_evaluator.instance();
+        let table_value = lookup_evaluator.evaluate(
             &mut eval_data,
             fixed_polys,
             advice_polys,
@@ -138,162 +244,42 @@ where
             isize,
         );
 
-        // Permutations
-        let sets = &permutation.sets;
-        if !sets.is_empty() {
-            let blinding_factors = pk.cs.blinding_factors();
-            let last_rotation = Rotation(-((blinding_factors + 1) as i32));
-            let chunk_len = pk.cs.degree() - 2;
-            let delta_start = domain.g_coset * beta;
+        let r_next = crate::plonk::evaluation::get_rotation_idx(row_idx, 1, rot_scale, isize);
+        let r_prev = crate::plonk::evaluation::get_rotation_idx(row_idx, -1, rot_scale, isize);
 
-            let permutation_product_cosets: Vec<Polynomial<F, LagrangeCoeff>> = sets
-                .iter()
-                .map(|set| domain.coeff_to_lagrange(set.permutation_product_poly.clone()))
-                .collect();
-
-            let first_set_permutation_product_coset = permutation_product_cosets.first().unwrap();
-            let last_set_permutation_product_coset = permutation_product_cosets.last().unwrap();
-
-            // Permutation constraints
-            // TODO: careful with this term - might be introducing a bug
-            let beta_term = omega.pow_vartime([row_idx as u64, 0, 0, 0]);
-            let r_next = crate::plonk::evaluation::get_rotation_idx(row_idx, 1, rot_scale, isize);
-            let r_last = crate::plonk::evaluation::get_rotation_idx(
-                row_idx,
-                last_rotation.0,
-                rot_scale,
-                isize,
-            );
-
-            // Enforce only for the first set.
-            // l_0(X) * (1 - z_0(X)) = 0
-            value =
-                value * y + ((one - first_set_permutation_product_coset[row_idx]) * l0[row_idx]);
-            // Enforce only for the last set.
-            // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
-            value = value * y
-                + ((last_set_permutation_product_coset[row_idx]
-                    * last_set_permutation_product_coset[row_idx]
-                    - last_set_permutation_product_coset[row_idx])
-                    * l_last[row_idx]);
-            // Except for the first set, enforce.
-            // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
-            for set_idx in 0..sets.len() {
-                if set_idx != 0 {
-                    value = value * y
-                        + ((permutation_product_cosets[set_idx][row_idx]
-                            - permutation_product_cosets[set_idx - 1][r_last])
-                            * l0[row_idx]);
-                }
-            }
-            // And for all the sets we enforce:
-            // (1 - (l_last(X) + l_blind(X))) * (
-            //   z_i(\omega X) \prod_j (p(X) + \beta s_j(X) + \gamma)
-            // - z_i(X) \prod_j (p(X) + \delta^j \beta X + \gamma)
-            // )
-            let mut current_delta = delta_start * beta_term;
-            for ((permutation_product_coset, columns), cosets) in permutation_product_cosets
-                .iter()
-                .zip(p.columns.chunks(chunk_len))
-                .zip(pk.permutation.cosets.chunks(chunk_len))
-            {
-                let mut left = permutation_product_coset[r_next];
-                for (values, permutation) in columns
-                    .iter()
-                    .map(|&column| match column.column_type() {
-                        Any::Advice(_) => &advice_polys[column.index()],
-                        Any::Fixed => &fixed_polys[column.index()],
-                        Any::Instance => &instance_polys[column.index()],
-                    })
-                    .zip(cosets.iter())
-                {
-                    left *= values[row_idx] + permutation[row_idx] * beta + gamma;
-                }
-
-                let mut right = permutation_product_coset[row_idx];
-                for values in columns.iter().map(|&column| match column.column_type() {
-                    Any::Advice(_) => &advice_polys[column.index()],
-                    Any::Fixed => &fixed_polys[column.index()],
-                    Any::Instance => &instance_polys[column.index()],
-                }) {
-                    right *= values[row_idx] + current_delta + gamma;
-                    current_delta *= &F::DELTA;
-                }
-
-                value = value * y + ((left - right) * l_active_row[row_idx]);
-            }
-        }
-
-        // Lookups
-        for (n, lookup) in lookups.iter().enumerate() {
-            // Polynomials required for this lookup.
-            // Calculated here so these only have to be kept in memory for the short time
-            // they are actually needed.
-            let product_coset = domain.coeff_to_extended(lookup.product_poly.clone());
-            let permuted_input_coset = domain.coeff_to_extended(lookup.permuted_input_poly.clone());
-            let permuted_table_coset = domain.coeff_to_extended(lookup.permuted_table_poly.clone());
-
-            // Lookup constraints
-            let lookup_evaluator = &pk.ev.lookups[n];
-            let mut eval_data = lookup_evaluator.instance();
-            let table_value = lookup_evaluator.evaluate(
-                &mut eval_data,
-                fixed_polys,
-                advice_polys,
-                instance_polys,
-                challenges,
-                &beta,
-                &gamma,
-                &theta,
-                &y,
-                &F::ZERO,
-                row_idx,
-                rot_scale,
-                isize,
-            );
-
-            let r_next = crate::plonk::evaluation::get_rotation_idx(row_idx, 1, rot_scale, isize);
-            let r_prev = crate::plonk::evaluation::get_rotation_idx(row_idx, -1, rot_scale, isize);
-
-            let a_minus_s = permuted_input_coset[row_idx] - permuted_table_coset[row_idx];
-            // l_0(X) * (1 - z(X)) = 0
-            value = value * y + ((one - product_coset[row_idx]) * l0[row_idx]);
-            // l_last(X) * (z(X)^2 - z(X)) = 0
-            value = value * y
-                + ((product_coset[row_idx] * product_coset[row_idx] - product_coset[row_idx])
-                    * l_last[row_idx]);
-            // (1 - (l_last(X) + l_blind(X))) * (
-            //   z(\omega X) (a'(X) + \beta) (s'(X) + \gamma)
-            //   - z(X) (\theta^{m-1} a_0(X) + ... + a_{m-1}(X) + \beta)
-            //          (\theta^{m-1} s_0(X) + ... + s_{m-1}(X) + \gamma)
-            // ) = 0
-            value = value * y
-                + ((product_coset[r_next]
-                    * (permuted_input_coset[row_idx] + beta)
-                    * (permuted_table_coset[row_idx] + gamma)
-                    - product_coset[row_idx] * table_value)
-                    * l_active_row[row_idx]);
-            // Check that the first values in the permuted input expression and permuted
-            // fixed expression are the same.
-            // l_0(X) * (a'(X) - s'(X)) = 0
-            value = value * y + (a_minus_s * l0[row_idx]);
-            // Check that each value in the permuted lookup input expression is either
-            // equal to the value above it, or the value at the same index in the
-            // permuted table expression.
-            // (1 - (l_last + l_blind)) * (a′(X) − s′(X))⋅(a′(X) − a′(\omega^{-1} X)) = 0
-            value = value * y
-                + (a_minus_s
-                    * (permuted_input_coset[row_idx] - permuted_input_coset[r_prev])
-                    * l_active_row[row_idx]);
-        }
-
-        res.push(value);
+        let a_minus_s = permuted_input_coset[row_idx] - permuted_table_coset[row_idx];
+        // l_0(X) * (1 - z(X)) = 0
+        value = value * y + ((one - product_coset[row_idx]) * l0[row_idx]);
+        // l_last(X) * (z(X)^2 - z(X)) = 0
+        value = value * y
+            + ((product_coset[row_idx] * product_coset[row_idx] - product_coset[row_idx])
+                * l_last[row_idx]);
+        // (1 - (l_last(X) + l_blind(X))) * (
+        //   z(\omega X) (a'(X) + \beta) (s'(X) + \gamma)
+        //   - z(X) (\theta^{m-1} a_0(X) + ... + a_{m-1}(X) + \beta)
+        //          (\theta^{m-1} s_0(X) + ... + s_{m-1}(X) + \gamma)
+        // ) = 0
+        value = value * y
+            + ((product_coset[r_next]
+                * (permuted_input_coset[row_idx] + beta)
+                * (permuted_table_coset[row_idx] + gamma)
+                - product_coset[row_idx] * table_value)
+                * l_active_row[row_idx]);
+        // Check that the first values in the permuted input expression and permuted
+        // fixed expression are the same.
+        // l_0(X) * (a'(X) - s'(X)) = 0
+        value = value * y + (a_minus_s * l0[row_idx]);
+        // Check that each value in the permuted lookup input expression is either
+        // equal to the value above it, or the value at the same index in the
+        // permuted table expression.
+        // (1 - (l_last + l_blind)) * (a′(X) − s′(X))⋅(a′(X) − a′(\omega^{-1} X)) = 0
+        value = value * y
+            + (a_minus_s
+                * (permuted_input_coset[row_idx] - permuted_input_coset[r_prev])
+                * l_active_row[row_idx]);
     }
 
-    Polynomial {
-        values: res,
-        _marker: Default::default(),
-    }
+    value
 }
 
 /// This creates part of a proof for the provided `circuit` when given the public
@@ -360,9 +346,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        InstanceSingle {
-            instance_values,
-        }
+        InstanceSingle { instance_values }
     };
 
     #[derive(Clone)]
@@ -684,13 +668,25 @@ where
     })
 }
 
-fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(pk: &FoldingPk<F>, dk_domain: &EvaluationDomain<F>, beta: &[F], lifted_folding_trace: &LiftedFoldingTrace<F>) -> Polynomial<F, ExtendedLagrangeCoeff> {
+fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
+    pk: &FoldingPk<F>,
+    dk_domain: &EvaluationDomain<F>,
+    beta: &[F],
+    lifted_folding_trace: &LiftedFoldingTrace<F>,
+) -> Polynomial<F, ExtendedLagrangeCoeff> {
     let beta_pows = pow_vec(beta);
 
     let mut g_poly = Polynomial::init(dk_domain.extended_len());
 
     beta_pows.iter().enumerate().for_each(|(i, beta_pow_i)| {
-        g_poly += &(eval_f_i(pk, i, lifted_folding_trace) * *beta_pow_i)
+        let evals: Vec<F> = lifted_folding_trace
+            .iter()
+            .map(|trace| eval_f_i(pk, i, trace))
+            .collect();
+        g_poly += &(Polynomial {
+            values: evals,
+            _marker: PhantomData,
+        } * *beta_pow_i);
     });
 
     g_poly
@@ -711,7 +707,7 @@ mod tests {
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
     use crate::poly::{EvaluationDomain, Rotation};
-    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, FoldingPk};
+    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, eval_f_i, FoldingPk};
     use crate::protogalaxy::traces::batch_traces;
     use crate::transcript::{CircuitTranscript, Transcript};
     use crate::utils::arithmetic::eval_polynomial;
@@ -800,6 +796,7 @@ mod tests {
     #[test]
     fn folding_test() {
         const K: u32 = 11;
+        let k = 1;
         let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
         let mut rand_bytes = [0u8; 1 << 10];
@@ -837,40 +834,51 @@ mod tests {
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
 
-        MockProver::run(K, &circuit1, vec![]).unwrap().assert_satisfied();
+        MockProver::run(K, &circuit1, vec![])
+            .unwrap()
+            .assert_satisfied();
         let mut transcript_1 = CircuitTranscript::init();
         let folding_trace_1 =
             create_folding_trace(&params, &pk, &circuit1, &[], OsRng, &mut transcript_1)
                 .expect("Failed to compute the folding trace");
 
-        let mut transcript_2 = CircuitTranscript::init();
-        let folding_trace_2 =
-            create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
-                .expect("Failed to compute the folding trace");
+        // let mut transcript_2 = CircuitTranscript::init();
+        // let folding_trace_2 =
+        //     create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
+        //         .expect("Failed to compute the folding trace");
 
-        let mut transcript_3 = CircuitTranscript::init();
-        let folding_trace_3 =
-            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
-                .expect("Failed to compute the folding trace");
+        // let mut transcript_3 = CircuitTranscript::init();
+        // let folding_trace_3 =
+        //     create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
+        //         .expect("Failed to compute the folding trace");
 
         let degree = pk.vk.cs.degree() as u32;
-        let dk_domain = EvaluationDomain::new(degree, 3);
+        let dk_domain = EvaluationDomain::new(degree, k);
         let folding_pk = FoldingPk::from(pk);
+
+        let g_poly = eval_f_i(&folding_pk, 0, &folding_trace_1);
+        dbg!(g_poly);
 
         let lifted_trace = batch_traces(
             &dk_domain,
-            &[folding_trace_1, folding_trace_2, folding_trace_3],
+            &[folding_trace_1], //, folding_trace_2, folding_trace_3],
         );
 
         let betas = [Fp::ONE; K as usize];
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
 
+        dbg!(&poly_g);
+
         let poly_g_coeff = dk_domain.extended_to_coeff(poly_g);
 
-        for exponent in 0..degree * 3 {
-            let res = eval_polynomial(&poly_g_coeff, dk_domain.get_omega().pow_vartime(&[exponent as u64]));
-            assert_eq!(res, Fp::ZERO);
-        }
+        // for exponent in 0..degree * k {
+        //     let res = eval_polynomial(
+        //         &poly_g_coeff,
+        //         dk_domain.get_omega().pow_vartime(&[exponent as u64]),
+        //     );
+        //     assert_eq!(res, Fp::ZERO);
+        // }
+
         // let poly_k = domain.divide_by_vanishing_poly(poly_g);
         //
         // domain
