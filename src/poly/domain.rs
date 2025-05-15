@@ -264,7 +264,8 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
-    /// Remove
+    /// This takes us from an n-length coefficient vector into the extended
+    /// evaluation domain (without coset).
     pub fn coeff_to_extended_without_coset(
         &self,
         mut a: Polynomial<F, Coeff>,
@@ -278,25 +279,6 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
             values: a.values,
             _marker: PhantomData,
         }
-    }
-
-    /// Rotate the extended domain polynomial over the original domain.
-    pub fn rotate_extended(
-        &self,
-        poly: &Polynomial<F, ExtendedLagrangeCoeff>,
-        rotation: Rotation,
-    ) -> Polynomial<F, ExtendedLagrangeCoeff> {
-        let new_rotation = ((1 << (self.extended_k - self.k)) * rotation.0.abs()) as usize;
-
-        let mut poly = poly.clone();
-
-        if rotation.0 >= 0 {
-            poly.values.rotate_left(new_rotation);
-        } else {
-            poly.values.rotate_right(new_rotation);
-        }
-
-        poly
     }
 
     /// This takes us from the extended evaluation domain and gets us the
@@ -319,6 +301,34 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         // Distribute powers to move from coset; opposite from the
         // transformation we performed earlier.
         self.distribute_powers_zeta(&mut a.values, false);
+
+        // Truncate it to match the size of the quotient polynomial; the
+        // evaluation domain might be slightly larger than necessary because
+        // it always lies on a power-of-two boundary.
+        a.values
+            .truncate((&self.n * self.quotient_poly_degree) as usize);
+
+        a.values
+    }
+
+    /// This takes us from the extended evaluation domain and gets us the
+    /// quotient polynomial coefficients.
+    ///
+    /// This function will panic if the provided vector is not the correct
+    /// length.
+    pub fn extended_to_coeff_without_coset(
+        &self,
+        mut a: Polynomial<F, ExtendedLagrangeCoeff>,
+    ) -> Vec<F> {
+        assert_eq!(a.values.len(), self.extended_len());
+
+        // Inverse FFT
+        Self::ifft(
+            &mut a.values,
+            self.extended_omega_inv,
+            self.extended_k,
+            self.extended_ifft_divisor,
+        );
 
         // Truncate it to match the size of the quotient polynomial; the
         // evaluation domain might be slightly larger than necessary because

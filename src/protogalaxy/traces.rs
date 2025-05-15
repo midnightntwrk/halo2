@@ -89,9 +89,6 @@ impl<'a, F: PrimeField> Add<&'a FoldingTrace<F>> for FoldingTrace<F> {
         for (lhs, rhs) in (self.instance_polys.iter_mut()).zip(rhs.instance_polys.iter()) {
             *lhs += rhs;
         }
-        for (lhs, rhs) in self.challenges.iter_mut().zip(rhs.challenges.iter()) {
-            *lhs += *rhs;
-        }
         for (lhs, rhs) in self.lookups.iter_mut().zip(rhs.lookups.iter()) {
             lhs.permuted_input_poly += &rhs.permuted_input_poly;
             lhs.permuted_table_poly += &rhs.permuted_table_poly;
@@ -99,6 +96,9 @@ impl<'a, F: PrimeField> Add<&'a FoldingTrace<F>> for FoldingTrace<F> {
         }
         for (lhs, rhs) in (self.permutation.sets.iter_mut()).zip(rhs.permutation.sets.iter()) {
             lhs.permutation_product_poly += &rhs.permutation_product_poly;
+        }
+        for (lhs, rhs) in self.challenges.iter_mut().zip(rhs.challenges.iter()) {
+            *lhs += *rhs;
         }
         self.beta += rhs.beta;
         self.gamma += rhs.gamma;
@@ -123,9 +123,6 @@ impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
         for p in self.instance_polys.iter_mut() {
             *p *= scalar;
         }
-        for p in self.challenges.iter_mut() {
-            *p *= scalar;
-        }
         for lhs in self.lookups.iter_mut() {
             lhs.permuted_input_poly *= scalar;
             lhs.permuted_table_poly *= scalar;
@@ -133,6 +130,9 @@ impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
         }
         for lhs in self.permutation.sets.iter_mut() {
             lhs.permutation_product_poly *= scalar;
+        }
+        for p in self.challenges.iter_mut() {
+            *p *= scalar;
         }
         self.beta *= scalar;
         self.gamma *= scalar;
@@ -165,7 +165,7 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
             l
         })
         .map(|p| dk_domain.lagrange_to_coeff(p))
-        .map(|p| dk_domain.coeff_to_extended(p))
+        .map(|p| dk_domain.coeff_to_extended_without_coset(p))
         .collect::<Vec<_>>();
 
     dbg!(&lagrange_polys);

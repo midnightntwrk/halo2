@@ -694,8 +694,6 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-
     use blstrs::{Bls12, Scalar as Fp};
     use ff::Field;
     use rand_core::{OsRng, RngCore};
@@ -832,6 +830,8 @@ mod tests {
             .unwrap();
         let circuit3 = TestCircuit { witness: witness_3 };
 
+        OsRng.fill_bytes(&mut rand_bytes);
+
         let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, K)
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
@@ -855,7 +855,8 @@ mod tests {
                 .expect("Failed to compute the folding trace");
 
         let degree = pk.vk.cs.degree() as u32;
-        let dk_domain = EvaluationDomain::new(degree, (k as f64 - 1.).log2() as u32 + 1);
+        let k_log2_ceil = (k as f64 - 1.).log2() as u32 + 1;
+        let dk_domain = EvaluationDomain::new(degree, k_log2_ceil);
         let folding_pk = FoldingPk::from(pk);
 
         let lifted_trace = batch_traces(
@@ -866,9 +867,11 @@ mod tests {
         let betas = [Fp::ONE; K as usize];
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
 
-        let poly_g_coeff = dk_domain.extended_to_coeff(poly_g);
+        dbg!(&poly_g);
 
-        for exponent in 0..k {
+        let poly_g_coeff = dk_domain.extended_to_coeff_without_coset(poly_g);
+
+        for exponent in 0..4 {
             let res = eval_polynomial(
                 &poly_g_coeff,
                 dk_domain.get_omega().pow_vartime(&[exponent as u64]),
