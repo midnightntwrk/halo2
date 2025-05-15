@@ -112,7 +112,6 @@ impl<'a, F: PrimeField> Add<&'a FoldingTrace<F>> for FoldingTrace<F> {
 impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
     type Output = Self;
 
-    /// TODO: parallelize.
     fn mul(mut self, scalar: F) -> Self {
         for p in self.fixed_polys.iter_mut() {
             *p *= scalar;

@@ -21,6 +21,8 @@ use crate::utils::arithmetic::parallelize;
 use crate::utils::rational::Rational;
 use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
 use rand_core::{CryptoRng, RngCore};
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::ops::RangeTo;
@@ -681,16 +683,38 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
     let mut g_poly = Polynomial::init(dk_domain.extended_len());
 
-    beta_pows.iter().enumerate().for_each(|(i, beta_pow_i)| {
-        let evals: Vec<F> = lifted_folding_trace
-            .iter()
-            .map(|trace| eval_f_i(pk, i, trace))
-            .collect();
-        g_poly += &(Polynomial {
-            values: evals,
-            _marker: PhantomData,
-        } * *beta_pow_i);
-    });
+    (beta_pows.iter().enumerate().collect::<Vec<_>>())
+        .chunks(1024)
+        .for_each(|chunk| {
+            let chunk_evals = chunk
+                .par_iter()
+                .map(|(i, beta_pow_i)| {
+                    lifted_folding_trace
+                        .iter()
+                        .map(|trace| eval_f_i(pk, *i, trace))
+                        .map(|eval| eval * *beta_pow_i)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            for evals in chunk_evals {
+                g_poly += &Polynomial {
+                    values: evals,
+                    _marker: PhantomData,
+                };
+            }
+        });
+
+    // beta_pows.iter().enumerate().for_each(|(i, beta_pow_i)| {
+    //     let evals: Vec<F> = lifted_folding_trace
+    //         .iter()
+    //         .map(|trace| eval_f_i(pk, i, trace))
+    //         .collect();
+    //     g_poly += &(Polynomial {
+    //         values: evals,
+    //         _marker: PhantomData,
+    //     } * *beta_pow_i);
+    // });
 
     g_poly
 }
