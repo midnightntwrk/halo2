@@ -678,6 +678,8 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
     lifted_folding_trace: &LiftedFoldingTrace<F>,
 ) -> Polynomial<F, ExtendedLagrangeCoeff> {
     let beta_pows = pow_vec(beta);
+    println!("beta_pows len: {:?}", beta_pows.len());
+    println!("Lifted folding trace len: {:?}", lifted_folding_trace.len());
 
     let init = Polynomial::init(dk_domain.extended_len());
 
@@ -716,7 +718,7 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct TestCircuit {
-        witness: [Value<Fp>; 1 << 10],
+        witness: [Value<Fp>; 1 << 8],
     }
 
     #[derive(Debug, Clone)]
@@ -734,7 +736,7 @@ mod tests {
 
         fn without_witnesses(&self) -> Self {
             Self {
-                witness: [Value::unknown(); 1 << 10],
+                witness: [Value::unknown(); 1 << 8],
             }
         }
 
@@ -797,11 +799,11 @@ mod tests {
 
     #[test]
     fn folding_test() {
-        const K: u32 = 11;
-        let k = 3;
+        const K: u32 = 9;
+        let k = 4;
         let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
-        let mut rand_bytes = [0u8; 1 << 10];
+        let mut rand_bytes = [0u8; 1 << 8];
         OsRng.fill_bytes(&mut rand_bytes);
 
         let witness_1 = rand_bytes
@@ -834,6 +836,14 @@ mod tests {
 
         OsRng.fill_bytes(&mut rand_bytes);
 
+        let witness_4 = rand_bytes
+            .into_iter()
+            .map(|byte| Value::known(Fp::from((byte as u64) + 1)))
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let circuit4 = TestCircuit { witness: witness_4 };
+
         let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, K)
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
@@ -855,6 +865,11 @@ mod tests {
             create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
                 .expect("Failed to compute first proof");
 
+        let mut transcript_4 = CircuitTranscript::init();
+        let proof_4 =
+            create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
+                .expect("Failed to compute first proof");
+
         println!("Create three proofs: {:?}", now.elapsed().as_millis());
 
         // Compute folding traces
@@ -874,6 +889,11 @@ mod tests {
             create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
                 .expect("Failed to compute the folding trace");
 
+        let mut transcript_4 = CircuitTranscript::init();
+        let folding_trace_4 =
+            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_4)
+                .expect("Failed to compute the folding trace");
+
         println!("Compute three traces: {:?}", now.elapsed().as_millis());
 
         let now = Instant::now();
@@ -884,16 +904,32 @@ mod tests {
 
         let lifted_trace = batch_traces(
             &dk_domain,
-            &[folding_trace_1, folding_trace_2, folding_trace_3],
+            &[folding_trace_1, folding_trace_2, folding_trace_3, folding_trace_4],
         );
         println!("Batch three traces: {:?}", now.elapsed().as_millis());
         let now = Instant::now();
 
-        let betas = [Fp::ONE; K as usize];
+        let mut betas = [Fp::ONE; K as usize];
+        // let mut beta_pow = Fp::random(OsRng);
+        // for beta in betas.iter_mut() {
+        //     *beta = beta_pow;
+        //     beta_pow *= beta_pow
+        // }
+
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
+        dbg!(&poly_g);
+        let poly_g_coeff = dk_domain.extended_to_coeff_without_coset(poly_g);
+        dbg!(&poly_g_coeff);
+        let poly_g = dk_domain.coeff_to_extended(Polynomial {
+            values: poly_g_coeff.clone(),
+            _marker: Default::default(),
+        });
+
         println!("G poly: {:?}", now.elapsed().as_millis());
 
-        let poly_g_coeff = dk_domain.extended_to_coeff_without_coset(poly_g);
+        let poly_k = dk_domain.divide_by_vanishing_poly(poly_g.clone());
+
+        let gamma = Fp::random(OsRng);
 
         for exponent in 0..4 {
             let res = eval_polynomial(
@@ -903,8 +939,14 @@ mod tests {
             assert_eq!(res, Fp::ZERO);
         }
 
-        // let poly_k = domain.divide_by_vanishing_poly(poly_g);
-        //
-        // domain
+        let poly_k_coeff = dk_domain.extended_to_coeff(poly_k);
+
+        // Final check. Eval G(X), K(X) and Z(X) in \gamma
+        let g_in_gamma = eval_polynomial(&poly_g_coeff, gamma);
+        let k_in_gamma = eval_polynomial(&poly_k_coeff, gamma);
+        dbg!(&dk_domain.n);
+        let z_in_gamma = gamma.pow_vartime(&[dk_domain.n]) - Fp::ONE;
+
+        assert_eq!(g_in_gamma, k_in_gamma * z_in_gamma);
     }
 }
