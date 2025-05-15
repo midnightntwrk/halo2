@@ -24,6 +24,9 @@ use rand_core::{CryptoRng, RngCore};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::ops::RangeTo;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::ParallelIterator;
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
 pub(crate) struct FoldingPk<F: PrimeField> {
@@ -694,16 +697,14 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
     use blstrs::{Bls12, Scalar as Fp};
     use ff::Field;
     use rand_core::{OsRng, RngCore};
 
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
     use crate::dev::MockProver;
-    use crate::plonk::{
-        keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression,
-        Selector, TableColumn,
-    };
+    use crate::plonk::{keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression, Selector, TableColumn, create_proof};
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
     use crate::poly::{EvaluationDomain, Polynomial, Rotation};
@@ -836,9 +837,27 @@ mod tests {
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
 
-        MockProver::run(K, &circuit1, vec![])
-            .unwrap()
-            .assert_satisfied();
+        // Compute real proofs:
+        let now = Instant::now();
+        let mut transcript_1 = CircuitTranscript::init();
+        let proof_1 =
+            create_proof(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
+                .expect("Failed to compute first proof");
+
+        let mut transcript_2 = CircuitTranscript::init();
+        let proof_2 =
+            create_proof(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
+                .expect("Failed to compute first proof");
+
+        let mut transcript_3 = CircuitTranscript::init();
+        let proof_3 =
+            create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
+                .expect("Failed to compute first proof");
+
+        println!("Create three proofs: {:?}", now.elapsed().as_millis());
+
+        // Compute folding traces
+        let now = Instant::now();
         let mut transcript_1 = CircuitTranscript::init();
         let folding_trace_1 =
             create_folding_trace(&params, &pk, &circuit1, &[], OsRng, &mut transcript_1)
@@ -854,6 +873,9 @@ mod tests {
             create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
                 .expect("Failed to compute the folding trace");
 
+        println!("Compute three traces: {:?}", now.elapsed().as_millis());
+
+        let now = Instant::now();
         let degree = pk.vk.cs.degree() as u32;
         let k_log2_ceil = (k as f64 - 1.).log2() as u32 + 1;
         let dk_domain = EvaluationDomain::new(degree, k_log2_ceil);
@@ -863,11 +885,12 @@ mod tests {
             &dk_domain,
             &[folding_trace_1, folding_trace_2, folding_trace_3],
         );
+        println!("Batch three traces: {:?}", now.elapsed().as_millis());
+        let now = Instant::now();
 
         let betas = [Fp::ONE; K as usize];
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
-
-        dbg!(&poly_g);
+        println!("G poly: {:?}", now.elapsed().as_millis());
 
         let poly_g_coeff = dk_domain.extended_to_coeff_without_coset(poly_g);
 

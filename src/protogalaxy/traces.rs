@@ -168,12 +168,8 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
         .map(|p| dk_domain.coeff_to_extended_without_coset(p))
         .collect::<Vec<_>>();
 
-    dbg!(&lagrange_polys);
-
     let dk_domain_size = lagrange_polys[0].num_coeffs();
     let trace_domain_size = traces[0].fixed_polys[0].num_coeffs();
-
-    dbg!(dk_domain_size);
 
     (0..dk_domain_size)
         .map(|i| {
