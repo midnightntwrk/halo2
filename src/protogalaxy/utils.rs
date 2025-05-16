@@ -56,7 +56,7 @@ pub(crate) fn pow_vec<F: Field>(vector: &[F]) -> Vec<F> {
 //   ...
 //                     c_k = scalars[k-1]
 // as desired.
-pub(crate) fn linear_combination<F, T>(mut buffer: T, elements: &[T], scalars: &[F]) -> T
+pub(crate) fn linear_combination<F, T>(mut buffer: T, elements: &[&T], scalars: &[F]) -> T
 where
     F: Field,
     T: for<'a> Add<&'a T, Output = T> + Mul<F, Output = T>,
@@ -102,7 +102,9 @@ mod tests {
         .iter()
         .for_each(|(elements, scalars, expected)| {
             let buffer = F::default();
-            let result = linear_combination(buffer, &to_field(&elements), &to_field(&scalars));
+            let elements = to_field(&elements);
+            let ref_elements = elements.iter().collect::<Vec<_>>();
+            let result = linear_combination(buffer, &ref_elements, &to_field(&scalars));
             assert_eq!(result, F::from(*expected as u64));
         });
     }

@@ -6,18 +6,20 @@ use std::ops::{Add, Mul};
 use ff::PrimeField;
 use ff::WithSmallOrderMulGroup;
 
-use crate::plonk::lookup;
 use crate::plonk::permutation;
-use crate::poly::EvaluationDomain;
+use crate::plonk::vanishing::prover::Committed;
+use crate::plonk::{lookup, vanishing};
+use crate::poly::{Coeff, EvaluationDomain};
 use crate::poly::{LagrangeCoeff, Polynomial};
-
-use super::utils::linear_combination;
+use crate::protogalaxy::utils::linear_combination;
 
 /// ω in the protogalaxy paper.
-pub(crate) struct FoldingTrace<F: PrimeField> {
+pub(crate) struct Trace<F: PrimeField> {
     pub(crate) fixed_polys: Vec<Polynomial<F, LagrangeCoeff>>,
     pub(crate) advice_polys: Vec<Polynomial<F, LagrangeCoeff>>,
-    pub(crate) instance_polys: Vec<Polynomial<F, LagrangeCoeff>>,
+    pub(crate) instance_values: Vec<Polynomial<F, LagrangeCoeff>>,
+    pub(crate) instance_polys: Vec<Polynomial<F, Coeff>>,
+    pub(crate) vanishing: vanishing::prover::Committed<F>,
     pub(crate) lookups: Vec<lookup::prover::Committed<F>>,
     pub(crate) permutation: permutation::prover::Committed<F>,
     pub(crate) challenges: Vec<F>,
@@ -27,7 +29,7 @@ pub(crate) struct FoldingTrace<F: PrimeField> {
     pub(crate) y: F,
 }
 
-impl<F: PrimeField> FoldingTrace<F> {
+impl<F: PrimeField> Trace<F> {
     pub fn init(
         domain_size: usize,
         num_fixed_polys: usize,
@@ -51,10 +53,14 @@ impl<F: PrimeField> FoldingTrace<F> {
                 permutation_product_poly: Polynomial::init(domain_size),
             });
         }
-        FoldingTrace {
+        Trace {
             fixed_polys: vec![Polynomial::init(domain_size); num_fixed_polys],
             advice_polys: vec![Polynomial::init(domain_size); num_advice_polys],
+            instance_values: vec![Polynomial::init(domain_size); num_advice_polys],
             instance_polys: vec![Polynomial::init(domain_size); num_instance_polys],
+            vanishing: Committed {
+                random_poly: Polynomial::init(domain_size),
+            },
             lookups,
             permutation: permutation::prover::Committed {
                 sets: permutation_sets,
@@ -68,11 +74,11 @@ impl<F: PrimeField> FoldingTrace<F> {
     }
 }
 
-impl<'a, F: PrimeField> Add<&'a FoldingTrace<F>> for FoldingTrace<F> {
+impl<'a, F: PrimeField> Add<&'a Trace<F>> for Trace<F> {
     type Output = Self;
 
     /// TODO: parallelize.
-    fn add(mut self, rhs: &FoldingTrace<F>) -> Self {
+    fn add(mut self, rhs: &Trace<F>) -> Self {
         assert_eq!(self.fixed_polys.len(), rhs.fixed_polys.len());
         assert_eq!(self.advice_polys.len(), rhs.advice_polys.len());
         assert_eq!(self.instance_polys.len(), rhs.instance_polys.len());
@@ -109,7 +115,7 @@ impl<'a, F: PrimeField> Add<&'a FoldingTrace<F>> for FoldingTrace<F> {
     }
 }
 
-impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
+impl<F: PrimeField> Mul<F> for Trace<F> {
     type Output = Self;
 
     fn mul(mut self, scalar: F) -> Self {
@@ -145,7 +151,7 @@ impl<F: PrimeField> Mul<F> for FoldingTrace<F> {
 /// A folding trace where, instead of field elements, we have polynomials.
 /// It is represented as a vector of folding traces, where the i-th folding trace
 /// represents the evaluation of the polynomial at the i-th domain point.
-pub type LiftedFoldingTrace<F> = Vec<FoldingTrace<F>>;
+pub type LiftedFoldingTrace<F> = Vec<Trace<F>>;
 
 /// Computes \sum_{j = 0}^k L_j(X) ω_j, where ω_j is the j-th trace,
 /// for j = 0, ..., k. The `degree` is the maximum degree of the
@@ -155,7 +161,7 @@ pub type LiftedFoldingTrace<F> = Vec<FoldingTrace<F>>;
 /// We could handle each output folding trace one by one instead.
 pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
     dk_domain: &EvaluationDomain<F>,
-    traces: &[FoldingTrace<F>],
+    traces: &[&Trace<F>],
 ) -> LiftedFoldingTrace<F> {
     let lagrange_polys = (0..traces.len())
         .map(|i| {
@@ -164,7 +170,7 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
             l
         })
         .map(|p| dk_domain.lagrange_to_coeff(p))
-        .map(|p| dk_domain.coeff_to_extended_without_coset(p))
+        .map(|p| dk_domain.coeff_to_extended(p))
         .collect::<Vec<_>>();
 
     let dk_domain_size = lagrange_polys[0].num_coeffs();
@@ -172,7 +178,7 @@ pub fn batch_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
     (0..dk_domain_size)
         .map(|i| {
-            let buffer = FoldingTrace::init(
+            let buffer = Trace::init(
                 trace_domain_size,
                 traces[0].fixed_polys.len(),
                 traces[0].advice_polys.len(),

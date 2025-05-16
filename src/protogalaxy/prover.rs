@@ -2,33 +2,31 @@
 //!
 #![allow(dead_code)]
 
-use crate::circuit::Value;
+use std::marker::PhantomData;
+
+use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
+use rand_core::{CryptoRng, RngCore};
+use rayon::iter::IndexedParallelIterator;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
+
 use crate::plonk::{
-    lookup, permutation, sealed, Advice, Any, Assignment, Challenge, Circuit, Column,
-    ConstraintSystem, Error, Evaluator, Fixed, FloorPlanner, Instance, ProvingKey, Selector,
+    permutation,
+    traces::{LiftedFoldingTrace, Trace},
+    Any, Assignment, Circuit, ConstraintSystem, Evaluator, FloorPlanner, ProvingKey, VerifyingKey,
 };
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::poly::{
-    batch_invert_rational, Basis, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff,
-    Polynomial, Rotation,
+    Basis, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
 };
-use crate::protogalaxy::traces::{FoldingTrace, LiftedFoldingTrace};
-use crate::protogalaxy::utils::pow_vec;
+use crate::protogalaxy::utils::{linear_combination, pow_vec};
 use crate::transcript::Hashable;
 use crate::transcript::Sampleable;
 use crate::transcript::Transcript;
-use crate::utils::arithmetic::parallelize;
-use crate::utils::rational::Rational;
-use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
-use rand_core::{CryptoRng, RngCore};
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::marker::PhantomData;
-use std::ops::RangeTo;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::IndexedParallelIterator;
-use rayon::iter::ParallelIterator;
+use crate::utils::arithmetic::{eval_polynomial, parallelize};
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
+#[derive(Clone)]
 pub(crate) struct FoldingPk<F: PrimeField> {
     domain: EvaluationDomain<F>,
     cs: ConstraintSystem<F>,
@@ -37,6 +35,56 @@ pub(crate) struct FoldingPk<F: PrimeField> {
     l_active_row: Polynomial<F, LagrangeCoeff>,
     permutation: permutation::ProvingKey<F>,
     ev: Evaluator<F>,
+}
+
+impl<F: PrimeField + WithSmallOrderMulGroup<3>> FoldingPk<F> {
+    /// Given a FoldingPk, it takes the folded trace and returns a proving key. Concretely,
+    /// it uses the folded fixed polys as the fixed polys for the proving key. The verifier
+    /// should perform the same operation to compute its new verifying key.
+    pub fn to_proving_key<CS: PolynomialCommitmentScheme<F>>(
+        self,
+        folded_trace: &Trace<F>,
+        vk: &VerifyingKey<F, CS>,
+    ) -> ProvingKey<F, CS> {
+        let FoldingPk {
+            domain,
+            l0,
+            l_last,
+            l_active_row,
+            permutation,
+            ev,
+            ..
+        } = self;
+        let lagrange_to_extended =
+            |poly: Polynomial<F, LagrangeCoeff>| -> Polynomial<F, ExtendedLagrangeCoeff> {
+                let tmp = domain.lagrange_to_coeff(poly);
+                domain.coeff_to_extended(tmp)
+            };
+
+        let fixed_values = folded_trace.fixed_polys.clone();
+        let fixed_polys = fixed_values
+            .iter()
+            .cloned()
+            .map(|p| domain.lagrange_to_coeff(p))
+            .collect::<Vec<_>>();
+        let fixed_cosets = fixed_polys
+            .iter()
+            .cloned()
+            .map(|p| domain.coeff_to_extended(p))
+            .collect::<Vec<_>>();
+
+        ProvingKey {
+            vk: vk.clone(),
+            l0: lagrange_to_extended(l0),
+            l_last: lagrange_to_extended(l_last),
+            l_active_row: lagrange_to_extended(l_active_row),
+            fixed_values,
+            fixed_polys,
+            fixed_cosets,
+            permutation,
+            ev,
+        }
+    }
 }
 
 impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>>
@@ -86,14 +134,14 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F
 /// `f_{row_idx}` at row `row_idx`. The `evaluator` polynomial `f_{row_idx}` is the aggregation
 /// (with `y`) of all custom gates, permutation and lookup identities.
 ///
-/// The function receives `[FoldingTrace<F>]`, which contains the 'lifted' folding trace, i.e.,
+/// The function receives `[Trace<F>]`, which contains the 'lifted' folding trace, i.e.,
 /// `\sum_{j = 0}^k L_j(X) ω_j`. The size of `traces` corresponds to the extended domain `d * k`.
 ///
 /// `eval_f` evaluates `f_{row_idx}` over the given folding trace.
 ///
 // TODO: We should create a `FoldingCommonPk`, which is a structure that contains all
 // necessary data from PKs, and one can generate it from several PKs:
-pub(crate) fn eval_f_i<F>(pk: &FoldingPk<F>, row_idx: usize, trace: &FoldingTrace<F>) -> F
+pub(crate) fn eval_f_i<F>(pk: &FoldingPk<F>, row_idx: usize, trace: &Trace<F>) -> F
 where
     F: PrimeField + WithSmallOrderMulGroup<3>,
 {
@@ -110,10 +158,10 @@ where
     let p = &pk.cs.permutation;
     let mut eval_data = pk.ev.custom_gates.instance();
 
-    let FoldingTrace {
+    let Trace {
         fixed_polys,
         advice_polys,
-        instance_polys,
+        instance_values,
         lookups,
         permutation,
         challenges,
@@ -121,12 +169,13 @@ where
         gamma,
         theta,
         y,
+        ..
     } = trace;
     let mut value = pk.ev.custom_gates.evaluate(
         &mut eval_data,
         fixed_polys,
         advice_polys,
-        instance_polys,
+        instance_values,
         challenges,
         &beta,
         &gamma,
@@ -198,7 +247,7 @@ where
                 .map(|&column| match column.column_type() {
                     Any::Advice(_) => &advice_polys[column.index()],
                     Any::Fixed => &fixed_polys[column.index()],
-                    Any::Instance => &instance_polys[column.index()],
+                    Any::Instance => &instance_values[column.index()],
                 })
                 .zip(cosets.iter())
             {
@@ -209,7 +258,7 @@ where
             for values in columns.iter().map(|&column| match column.column_type() {
                 Any::Advice(_) => &advice_polys[column.index()],
                 Any::Fixed => &fixed_polys[column.index()],
-                Any::Instance => &instance_polys[column.index()],
+                Any::Instance => &instance_values[column.index()],
             }) {
                 right *= values[row_idx] + current_delta + gamma;
                 current_delta *= &F::DELTA;
@@ -235,7 +284,7 @@ where
             &mut eval_data,
             fixed_polys,
             advice_polys,
-            instance_polys,
+            instance_values,
             challenges,
             &beta,
             &gamma,
@@ -285,391 +334,21 @@ where
     value
 }
 
-/// This creates part of a proof for the provided `circuit` when given the public
-/// parameters `params` and the proving key [`ProvingKey`] that was
-/// generated previously for the same circuit. The partial result is used to fold
-/// several proofs together.
-pub(crate) fn create_folding_trace<
-    F,
-    CS: PolynomialCommitmentScheme<F>,
-    T: Transcript,
-    ConcreteCircuit: Circuit<F>,
->(
-    params: &CS::Parameters,
-    pk: &ProvingKey<F, CS>,
-    circuit: &ConcreteCircuit,
-    instances: &[&[F]],
-    mut rng: impl RngCore + CryptoRng,
-    transcript: &mut T,
-) -> Result<FoldingTrace<F>, Error>
-where
-    CS::Commitment: Hashable<T::Hash>,
-    F: WithSmallOrderMulGroup<3>
-        + Sampleable<T::Hash>
-        + Hashable<T::Hash>
-        + Ord
-        + FromUniformBytes<64>,
-{
-    if instances.len() != pk.vk.cs.num_instance_columns {
-        return Err(Error::InvalidInstances);
-    }
-
-    // Hash verification key into transcript
-    pk.vk.hash_into(transcript)?;
-
-    let domain = &pk.vk.domain;
-    let mut meta = ConstraintSystem::default();
-    #[cfg(feature = "circuit-params")]
-    let config = ConcreteCircuit::configure_with_params(&mut meta, circuit.params());
-    #[cfg(not(feature = "circuit-params"))]
-    let config = ConcreteCircuit::configure(&mut meta);
-
-    // Selector optimizations cannot be applied here; use the ConstraintSystem
-    // from the verification key.
-    let meta = &pk.vk.cs;
-
-    struct InstanceSingle<F: PrimeField> {
-        pub instance_values: Vec<Polynomial<F, LagrangeCoeff>>,
-    }
-
-    let instance: InstanceSingle<F> = {
-        let instance_values = instances
-            .iter()
-            .map(|values| {
-                let mut poly = domain.empty_lagrange();
-                assert_eq!(poly.len(), domain.n as usize);
-                if values.len() > (poly.len() - (meta.blinding_factors() + 1)) {
-                    return Err(Error::InstanceTooLarge);
-                }
-                for (poly, value) in poly.iter_mut().zip(values.iter()) {
-                    transcript.common(value)?;
-                    *poly = *value;
-                }
-                Ok(poly)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        InstanceSingle { instance_values }
-    };
-
-    #[derive(Clone)]
-    struct AdviceSingle<F: PrimeField, B: Basis> {
-        pub advice_polys: Vec<Polynomial<F, B>>,
-    }
-
-    struct WitnessCollection<'a, F: Field> {
-        k: u32,
-        current_phase: sealed::Phase,
-        advice: Vec<Polynomial<Rational<F>, LagrangeCoeff>>,
-        unblinded_advice: HashSet<usize>,
-        challenges: &'a HashMap<usize, F>,
-        instances: &'a [&'a [F]],
-        usable_rows: RangeTo<usize>,
-        _marker: std::marker::PhantomData<F>,
-    }
-
-    impl<'a, F: Field> Assignment<F> for WitnessCollection<'a, F> {
-        fn enter_region<NR, N>(&mut self, _: N)
-        where
-            NR: Into<String>,
-            N: FnOnce() -> NR,
-        {
-            // Do nothing; we don't care about regions in this context.
-        }
-
-        fn exit_region(&mut self) {
-            // Do nothing; we don't care about regions in this context.
-        }
-
-        fn enable_selector<A, AR>(&mut self, _: A, _: &Selector, _: usize) -> Result<(), Error>
-        where
-            A: FnOnce() -> AR,
-            AR: Into<String>,
-        {
-            // We only care about advice columns here
-
-            Ok(())
-        }
-
-        fn annotate_column<A, AR>(&mut self, _annotation: A, _column: Column<Any>)
-        where
-            A: FnOnce() -> AR,
-            AR: Into<String>,
-        {
-            // Do nothing
-        }
-
-        fn query_instance(&self, column: Column<Instance>, row: usize) -> Result<Value<F>, Error> {
-            if !self.usable_rows.contains(&row) {
-                return Err(Error::not_enough_rows_available(self.k));
-            }
-
-            self.instances
-                .get(column.index())
-                .and_then(|column| column.get(row))
-                .map(|v| Value::known(*v))
-                .ok_or(Error::BoundsFailure)
-        }
-
-        fn assign_advice<V, VR, A, AR>(
-            &mut self,
-            _: A,
-            column: Column<Advice>,
-            row: usize,
-            to: V,
-        ) -> Result<(), Error>
-        where
-            V: FnOnce() -> Value<VR>,
-            VR: Into<Rational<F>>,
-            A: FnOnce() -> AR,
-            AR: Into<String>,
-        {
-            // Ignore assignment of advice column in different phase than current one.
-            if self.current_phase != column.column_type().phase {
-                return Ok(());
-            }
-
-            if !self.usable_rows.contains(&row) {
-                return Err(Error::not_enough_rows_available(self.k));
-            }
-
-            *self
-                .advice
-                .get_mut(column.index())
-                .and_then(|v| v.get_mut(row))
-                .ok_or(Error::BoundsFailure)? = to().into_field().assign()?;
-
-            Ok(())
-        }
-
-        fn assign_fixed<V, VR, A, AR>(
-            &mut self,
-            _: A,
-            _: Column<Fixed>,
-            _: usize,
-            _: V,
-        ) -> Result<(), Error>
-        where
-            V: FnOnce() -> Value<VR>,
-            VR: Into<Rational<F>>,
-            A: FnOnce() -> AR,
-            AR: Into<String>,
-        {
-            // We only care about advice columns here
-
-            Ok(())
-        }
-
-        fn copy(
-            &mut self,
-            _: Column<Any>,
-            _: usize,
-            _: Column<Any>,
-            _: usize,
-        ) -> Result<(), Error> {
-            // We only care about advice columns here
-
-            Ok(())
-        }
-
-        fn fill_from_row(
-            &mut self,
-            _: Column<Fixed>,
-            _: usize,
-            _: Value<Rational<F>>,
-        ) -> Result<(), Error> {
-            Ok(())
-        }
-
-        fn get_challenge(&self, challenge: Challenge) -> Value<F> {
-            self.challenges
-                .get(&challenge.index())
-                .cloned()
-                .map(Value::known)
-                .unwrap_or_else(Value::unknown)
-        }
-
-        fn push_namespace<NR, N>(&mut self, _: N)
-        where
-            NR: Into<String>,
-            N: FnOnce() -> NR,
-        {
-            // Do nothing; we don't care about namespaces in this context.
-        }
-
-        fn pop_namespace(&mut self, _: Option<String>) {
-            // Do nothing; we don't care about namespaces in this context.
-        }
-    }
-
-    let (advice, challenges) = {
-        let mut advice = AdviceSingle::<F, LagrangeCoeff> {
-            advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
-        };
-        let mut challenges = HashMap::<usize, F>::with_capacity(meta.num_challenges);
-
-        let unusable_rows_start = domain.n as usize - (meta.blinding_factors() + 1);
-        for current_phase in pk.vk.cs.phases() {
-            let column_indices = meta
-                .advice_column_phase
-                .iter()
-                .enumerate()
-                .filter_map(|(column_index, phase)| {
-                    if current_phase == *phase {
-                        Some(column_index)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<BTreeSet<_>>();
-
-            let mut witness = WitnessCollection {
-                k: domain.k(),
-                current_phase,
-                advice: vec![domain.empty_lagrange_rational(); meta.num_advice_columns],
-                unblinded_advice: HashSet::from_iter(meta.unblinded_advice_columns.clone()),
-                instances,
-                challenges: &challenges,
-                // The prover will not be allowed to assign values to advice
-                // cells that exist within inactive rows, which include some
-                // number of blinding factors and an extra row for use in the
-                // permutation argument.
-                usable_rows: ..unusable_rows_start,
-                _marker: std::marker::PhantomData,
-            };
-
-            // Synthesize the circuit to obtain the witness and other information.
-            ConcreteCircuit::FloorPlanner::synthesize(
-                &mut witness,
-                circuit,
-                config.clone(),
-                meta.constants.clone(),
-            )?;
-
-            let mut advice_values = batch_invert_rational::<F>(
-                witness
-                    .advice
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(column_index, advice)| {
-                        if column_indices.contains(&column_index) {
-                            Some(advice)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
-            );
-
-            for (column_index, advice_values) in column_indices.iter().zip(&mut advice_values) {
-                if !witness.unblinded_advice.contains(column_index) {
-                    for cell in &mut advice_values[unusable_rows_start..] {
-                        *cell = F::random(&mut rng);
-                    }
-                } else {
-                    #[cfg(feature = "sanity-checks")]
-                    for cell in &advice_values[unusable_rows_start..] {
-                        assert_eq!(*cell, F::ZERO);
-                    }
-                }
-            }
-
-            let advice_commitments: Vec<_> = advice_values
-                .iter()
-                .map(|poly| CS::commit_lagrange(params, poly))
-                .collect();
-
-            for commitment in &advice_commitments {
-                transcript.write(commitment)?;
-            }
-            for (column_index, advice_values) in column_indices.iter().zip(advice_values) {
-                advice.advice_polys[*column_index] = advice_values;
-            }
-
-            for (index, phase) in meta.challenge_phase.iter().enumerate() {
-                if current_phase == *phase {
-                    let existing = challenges.insert(index, transcript.squeeze_challenge());
-                    assert!(existing.is_none());
-                }
-            }
-        }
-
-        assert_eq!(challenges.len(), meta.num_challenges);
-        let challenges = (0..meta.num_challenges)
-            .map(|index| challenges.remove(&index).unwrap())
-            .collect::<Vec<_>>();
-
-        (advice, challenges)
-    };
-
-    // Sample theta challenge for keeping lookup columns linearly independent
-    let theta: F = transcript.squeeze_challenge();
-
-    let lookups: Vec<lookup::prover::Permuted<F>> =
-            // Construct and commit to permuted values for each lookup
-            pk.vk
-                .cs
-                .lookups
-                .iter()
-                .map(|lookup| {
-                    lookup.commit_permuted(
-                        pk,
-                        params,
-                        domain,
-                        theta,
-                        &advice.advice_polys,
-                        &pk.fixed_values,
-                        &instance.instance_values,
-                        &challenges,
-                        &mut rng,
-                        transcript,
-                    )
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
-
-    // Sample beta challenge
-    let beta: F = transcript.squeeze_challenge();
-
-    // Sample gamma challenge
-    let gamma: F = transcript.squeeze_challenge();
-
-    // Commit to permutations.
-    let permutation: permutation::prover::Committed<F> = pk.vk.cs.permutation.commit(
-        params,
-        pk,
-        &pk.permutation,
-        &advice.advice_polys,
-        &pk.fixed_values,
-        &instance.instance_values,
-        beta,
-        gamma,
-        &mut rng,
-        transcript,
-    )?;
-
-    let lookups: Vec<lookup::prover::Committed<F>> =
-            // Construct and commit to products for each lookup
-            lookups
-                .into_iter()
-                .map(|lookup| lookup.commit_product(pk, params, beta, gamma, &mut rng, transcript))
-                .collect::<Result<Vec<_>, _>>()?;
-
-    // Obtain challenge for keeping all separate gates linearly independent
-    let y: F = transcript.squeeze_challenge();
-
-    Ok(FoldingTrace {
-        fixed_polys: pk.fixed_values.clone(),
-        advice_polys: advice.advice_polys,
-        instance_polys: instance.instance_values,
-        lookups,
-        permutation,
-        challenges,
-        beta,
-        gamma,
-        theta,
-        y,
-    })
-}
+/// Tasks to clean this up a bit:
+/// We should have the function `create_proof` that is split into two:
+/// * The prepare proof (which would give you the proof up to the point that folding requires it)
+/// * The finalise proof (which takes a trace, and finalises the proof
+///
+/// We should also start a proper interface for folding. In this way, all instances (meaning all
+/// challenges included) can be verified.
+///
+/// Then the proof verifier would:
+/// * Parse the transcript and compute the different challenges.
+/// * Perform the linear combination of challenges
+/// * Perform the linear combinations of commitments of advice
+/// * Perform the linear combination of fixed columns (from the VK)
+/// * Verify the plonk proof with these new commitments
+/// * Think about what we need to do with the error - unclear where we'll put it.
 
 fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
     pk: &FoldingPk<F>,
@@ -683,36 +362,79 @@ fn compute_poly_g<F: PrimeField + WithSmallOrderMulGroup<3>>(
 
     let init = Polynomial::init(dk_domain.extended_len());
 
-    let g_poly = beta_pows.par_iter().enumerate().fold(|| init.clone(), |g, (i, beta_pow_i)| {
-        let evals: Vec<F> = lifted_folding_trace
-            .par_iter()
-            .map(|trace| eval_f_i(pk, i, trace))
-            .collect();
-        g + &(Polynomial {
-            values: evals,
-            _marker: PhantomData,
-        } * *beta_pow_i)
-    })
+    let g_poly = beta_pows
+        .par_iter()
+        .enumerate()
+        .fold(
+            || init.clone(),
+            |g, (i, beta_pow_i)| {
+                let evals: Vec<F> = lifted_folding_trace
+                    .par_iter()
+                    .map(|trace| eval_f_i(pk, i, trace))
+                    .collect();
+                g + &(Polynomial {
+                    values: evals,
+                    _marker: PhantomData,
+                } * *beta_pow_i)
+            },
+        )
         .reduce(|| init.clone(), |a, b| a + b);
 
     g_poly
 }
 
+/// Function to fold traces over an evaluation `\gamma`
+fn fold_traces<F: PrimeField + WithSmallOrderMulGroup<3>>(
+    dk_domain: &EvaluationDomain<F>,
+    traces: &[&Trace<F>],
+    gamma: &F,
+) -> Trace<F> {
+    let lagrange_polys = (0..traces.len())
+        .map(|i| {
+            let mut l = dk_domain.empty_lagrange();
+            l[i] = F::ONE;
+            l
+        })
+        .map(|p| dk_domain.lagrange_to_coeff(p))
+        .collect::<Vec<_>>();
+
+    let trace_domain_size = traces[0].fixed_polys[0].num_coeffs();
+
+    let buffer = Trace::init(
+        trace_domain_size,
+        traces[0].fixed_polys.len(),
+        traces[0].advice_polys.len(),
+        traces[0].instance_polys.len(),
+        traces[0].lookups.len(),
+        traces[0].permutation.sets.len(),
+        traces[0].challenges.len(),
+    );
+    let lagranges_in_gamma = lagrange_polys
+        .iter()
+        .map(|poly| eval_polynomial(poly, *gamma))
+        .collect::<Vec<_>>();
+
+    linear_combination(buffer, traces, &lagranges_in_gamma)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
+
     use blstrs::{Bls12, Scalar as Fp};
     use ff::Field;
     use rand_core::{OsRng, RngCore};
 
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
-    use crate::dev::MockProver;
-    use crate::plonk::{keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression, Selector, TableColumn, create_proof};
+    use crate::plonk::traces::batch_traces;
+    use crate::plonk::{
+        compute_trace, create_proof, keygen_pk, keygen_vk_with_k, Advice, Circuit, Column,
+        ConstraintSystem, Error, Expression, Selector, TableColumn,
+    };
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
-    use crate::poly::{EvaluationDomain, Polynomial, Rotation};
-    use crate::protogalaxy::prover::{compute_poly_g, create_folding_trace, FoldingPk};
-    use crate::protogalaxy::traces::batch_traces;
+    use crate::poly::{EvaluationDomain, Rotation};
+    use crate::protogalaxy::prover::{compute_poly_g, fold_traces, FoldingPk};
     use crate::transcript::{CircuitTranscript, Transcript};
     use crate::utils::arithmetic::eval_polynomial;
 
@@ -751,7 +473,10 @@ mod tests {
                 let selector = meta.query_selector(config.selector);
                 let not_selector = Expression::Constant(Fp::ONE) - selector.clone();
                 let advice = meta.query_advice(config.advice, Rotation::cur());
-                vec![(selector * advice + not_selector, config.table)]
+                vec![(
+                    selector * advice + not_selector.clone() * not_selector.clone() * not_selector,
+                    config.table,
+                )]
             });
 
             config
@@ -851,24 +576,20 @@ mod tests {
         // Compute real proofs:
         let now = Instant::now();
         let mut transcript_1 = CircuitTranscript::init();
-        let proof_1 =
-            create_proof(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
-                .expect("Failed to compute first proof");
+        let proof_1 = create_proof(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
+            .expect("Failed to compute first proof");
 
         let mut transcript_2 = CircuitTranscript::init();
-        let proof_2 =
-            create_proof(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
-                .expect("Failed to compute first proof");
+        let proof_2 = create_proof(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
+            .expect("Failed to compute first proof");
 
         let mut transcript_3 = CircuitTranscript::init();
-        let proof_3 =
-            create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
-                .expect("Failed to compute first proof");
+        let proof_3 = create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
+            .expect("Failed to compute first proof");
 
         let mut transcript_4 = CircuitTranscript::init();
-        let proof_4 =
-            create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
-                .expect("Failed to compute first proof");
+        let proof_4 = create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
+            .expect("Failed to compute first proof");
 
         println!("Create three proofs: {:?}", now.elapsed().as_millis());
 
@@ -876,22 +597,22 @@ mod tests {
         let now = Instant::now();
         let mut transcript_1 = CircuitTranscript::init();
         let folding_trace_1 =
-            create_folding_trace(&params, &pk, &circuit1, &[], OsRng, &mut transcript_1)
+            compute_trace(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
                 .expect("Failed to compute the folding trace");
 
         let mut transcript_2 = CircuitTranscript::init();
         let folding_trace_2 =
-            create_folding_trace(&params, &pk, &circuit2, &[], OsRng, &mut transcript_2)
+            compute_trace(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
                 .expect("Failed to compute the folding trace");
 
         let mut transcript_3 = CircuitTranscript::init();
         let folding_trace_3 =
-            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_3)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
                 .expect("Failed to compute the folding trace");
 
         let mut transcript_4 = CircuitTranscript::init();
         let folding_trace_4 =
-            create_folding_trace(&params, &pk, &circuit3, &[], OsRng, &mut transcript_4)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
                 .expect("Failed to compute the folding trace");
 
         println!("Compute three traces: {:?}", now.elapsed().as_millis());
@@ -904,7 +625,12 @@ mod tests {
 
         let lifted_trace = batch_traces(
             &dk_domain,
-            &[folding_trace_1, folding_trace_2, folding_trace_3, folding_trace_4],
+            &[
+                &folding_trace_1[0],
+                &folding_trace_2[0],
+                &folding_trace_3[0],
+                &folding_trace_4[0],
+            ],
         );
         println!("Batch three traces: {:?}", now.elapsed().as_millis());
         let now = Instant::now();
@@ -917,15 +643,7 @@ mod tests {
         // }
 
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
-        dbg!(&poly_g);
-        let poly_g_coeff = dk_domain.extended_to_coeff_without_coset(poly_g);
-        dbg!(&poly_g_coeff);
-        let poly_g = dk_domain.coeff_to_extended(Polynomial {
-            values: poly_g_coeff.clone(),
-            _marker: Default::default(),
-        });
-
-        println!("G poly: {:?}", now.elapsed().as_millis());
+        let poly_g_coeff = dk_domain.extended_to_coeff(poly_g.clone());
 
         let poly_k = dk_domain.divide_by_vanishing_poly(poly_g.clone());
 
@@ -944,9 +662,19 @@ mod tests {
         // Final check. Eval G(X), K(X) and Z(X) in \gamma
         let g_in_gamma = eval_polynomial(&poly_g_coeff, gamma);
         let k_in_gamma = eval_polynomial(&poly_k_coeff, gamma);
-        dbg!(&dk_domain.n);
         let z_in_gamma = gamma.pow_vartime(&[dk_domain.n]) - Fp::ONE;
 
         assert_eq!(g_in_gamma, k_in_gamma * z_in_gamma);
+
+        let folded_trace = fold_traces(
+            &dk_domain,
+            &[
+                &folding_trace_1[0],
+                &folding_trace_2[0],
+                &folding_trace_3[0],
+                &folding_trace_4[0],
+            ],
+            &gamma,
+        );
     }
 }

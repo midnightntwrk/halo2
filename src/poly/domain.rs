@@ -264,23 +264,6 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         }
     }
 
-    /// This takes us from an n-length coefficient vector into the extended
-    /// evaluation domain (without coset).
-    pub fn coeff_to_extended_without_coset(
-        &self,
-        mut a: Polynomial<F, Coeff>,
-    ) -> Polynomial<F, ExtendedLagrangeCoeff> {
-        assert_eq!(a.values.len(), 1 << self.k);
-
-        a.values.resize(self.extended_len(), F::ZERO);
-        best_fft(&mut a.values, self.extended_omega, self.extended_k);
-
-        Polynomial {
-            values: a.values,
-            _marker: PhantomData,
-        }
-    }
-
     /// This takes us from the extended evaluation domain and gets us the
     /// quotient polynomial coefficients.
     ///
@@ -301,34 +284,6 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         // Distribute powers to move from coset; opposite from the
         // transformation we performed earlier.
         self.distribute_powers_zeta(&mut a.values, false);
-
-        // Truncate it to match the size of the quotient polynomial; the
-        // evaluation domain might be slightly larger than necessary because
-        // it always lies on a power-of-two boundary.
-        a.values
-            .truncate((&self.n * self.quotient_poly_degree) as usize);
-
-        a.values
-    }
-
-    /// This takes us from the extended evaluation domain and gets us the
-    /// quotient polynomial coefficients.
-    ///
-    /// This function will panic if the provided vector is not the correct
-    /// length.
-    pub fn extended_to_coeff_without_coset(
-        &self,
-        mut a: Polynomial<F, ExtendedLagrangeCoeff>,
-    ) -> Vec<F> {
-        assert_eq!(a.values.len(), self.extended_len());
-
-        // Inverse FFT
-        Self::ifft(
-            &mut a.values,
-            self.extended_omega_inv,
-            self.extended_k,
-            self.extended_ifft_divisor,
-        );
 
         // Truncate it to match the size of the quotient polynomial; the
         // evaluation domain might be slightly larger than necessary because

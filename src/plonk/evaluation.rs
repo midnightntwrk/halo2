@@ -262,7 +262,7 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
 
     /// Evaluate h poly
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::plonk) fn evaluate_h<CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn evaluate_h<CS: PolynomialCommitmentScheme<F>>(
         &self,
         pk: &ProvingKey<F, CS>,
         advice_polys: &[&[Polynomial<F, Coeff>]],

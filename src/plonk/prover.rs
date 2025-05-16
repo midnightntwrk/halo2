@@ -21,16 +21,20 @@ use crate::{
 };
 
 use crate::circuit::Value;
+use crate::plonk::traces::Trace;
 use crate::poly::batch_invert_rational;
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::rational::Rational;
 
-/// This creates a proof for the provided `circuit` when given the public
+/// This computes traces for the provided `circuits` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
 /// generated previously for the same circuit. The provided `instances`
 /// are zero-padded internally.
-pub fn create_proof<
+///
+/// The traces can then be used to finalise each proof individually, or
+/// to fold them.
+pub fn compute_trace<
     F,
     CS: PolynomialCommitmentScheme<F>,
     T: Transcript,
@@ -42,7 +46,7 @@ pub fn create_proof<
     instances: &[&[&[F]]],
     mut rng: impl RngCore + CryptoRng,
     transcript: &mut T,
-) -> Result<(), Error>
+) -> Result<Vec<Trace<F>>, Error>
 where
     CS::Commitment: Hashable<T::Hash>,
     F: WithSmallOrderMulGroup<3>
@@ -444,39 +448,112 @@ where
     // Obtain challenge for keeping all separate gates linearly independent
     let y: F = transcript.squeeze_challenge();
 
-    // Calculate the advice polys
-    let advice: Vec<AdviceSingle<F, Coeff>> = advice
-        .into_iter()
-        .map(|AdviceSingle { advice_polys }| AdviceSingle {
-            advice_polys: advice_polys
-                .into_iter()
-                .map(|poly| domain.lagrange_to_coeff(poly))
-                .collect::<Vec<_>>(),
+    Ok(advice
+        .iter()
+        .zip(instance.iter().zip(lookups.iter().zip(permutations.iter())))
+        .map(|(advice, (instance, (lookups, permutation)))| Trace {
+            fixed_polys: pk.fixed_values.clone(),
+            advice_polys: advice.advice_polys.clone(),
+            instance_polys: instance.instance_polys.clone(),
+            instance_values: instance.instance_values.clone(),
+            vanishing: vanishing.clone(),
+            lookups: lookups.clone(),
+            permutation: permutation.clone(),
+            challenges: challenges.clone(),
+            beta,
+            gamma,
+            theta,
+            y,
         })
-        .collect();
+        .collect::<Vec<Trace<F>>>())
+}
 
-    // Evaluate the h(X) polynomial
-    let h_poly = pk.ev.evaluate_h(
-        pk,
-        &advice
-            .iter()
-            .map(|a| a.advice_polys.as_slice())
-            .collect::<Vec<_>>(),
-        &instance
-            .iter()
-            .map(|i| i.instance_polys.as_slice())
-            .collect::<Vec<_>>(),
-        &challenges,
+/// This takes the computed traces of a set of witnesses and creates a proof
+/// for the provided `circuit` when given the public
+/// parameters `params` and the proving key [`ProvingKey`] that was
+/// generated previously for the same circuit. The provided `instances`
+/// are zero-padded internally.
+pub fn finalise_proof<F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
+    params: &CS::Parameters,
+    pk: &ProvingKey<F, CS>,
+    traces: &[Trace<F>],
+    transcript: &mut T,
+) -> Result<(), Error>
+where
+    CS::Commitment: Hashable<T::Hash>,
+    F: WithSmallOrderMulGroup<3>
+        + Sampleable<T::Hash>
+        + Hashable<T::Hash>
+        + Ord
+        + FromUniformBytes<64>,
+{
+    let domain = pk.get_vk().get_domain();
+    let meta = pk.get_vk().cs();
+
+    let Trace {
+        challenges,
         y,
         beta,
         gamma,
         theta,
+        vanishing,
+        ..
+    } = &traces[0];
+    let mut advice = Vec::with_capacity(traces.len());
+    let mut instance = Vec::with_capacity(traces.len());
+    let mut lookups = Vec::with_capacity(traces.len());
+    let mut permutations = Vec::with_capacity(traces.len());
+
+    for trace in traces {
+        assert_eq!(
+            trace.y, *y,
+            "We can only finalise proofs that were generated together"
+        );
+        assert_eq!(
+            trace.beta, *beta,
+            "We can only finalise proofs that were generated together"
+        );
+        assert_eq!(
+            trace.gamma, *gamma,
+            "We can only finalise proofs that were generated together"
+        );
+        assert_eq!(
+            trace.theta, *theta,
+            "We can only finalise proofs that were generated together"
+        );
+
+        let advice_polys = trace
+            .advice_polys
+            .iter()
+            .map(|poly| pk.get_vk().get_domain().lagrange_to_coeff(poly.clone()))
+            .collect::<Vec<_>>();
+
+        advice.push(advice_polys);
+        instance.push(trace.instance_polys.clone());
+    }
+
+    // Evaluate the h(X) polynomial
+    let h_poly = pk.ev.evaluate_h(
+        pk,
+        &advice.iter().map(|a| a.as_slice()).collect::<Vec<_>>(),
+        &instance.iter().map(|i| i.as_slice()).collect::<Vec<_>>(),
+        &challenges,
+        *y,
+        *beta,
+        *gamma,
+        *theta,
         &lookups,
         &permutations,
     );
 
     // Construct the vanishing argument's h(X) commitments
-    let vanishing = vanishing.construct::<CS, T>(params, domain, h_poly, transcript)?;
+    // TODO: This clone here is dangerous. Figure out a way to avoid it
+    let vanishing = vanishing.clone().construct::<CS, T>(
+        params,
+        pk.get_vk().get_domain(),
+        h_poly,
+        transcript,
+    )?;
 
     let x: F = transcript.squeeze_challenge();
 
@@ -487,10 +564,7 @@ where
             .advice_queries
             .iter()
             .map(|&(column, at)| {
-                eval_polynomial(
-                    &advice.advice_polys[column.index()],
-                    domain.rotate_omega(x, at),
-                )
+                eval_polynomial(&advice[column.index()], domain.rotate_omega(x, at))
             })
             .collect();
 
@@ -549,7 +623,7 @@ where
                         .iter()
                         .map(move |&(column, at)| ProverQuery {
                             point: domain.rotate_omega(x, at),
-                            poly: &advice.advice_polys[column.index()],
+                            poly: &advice[column.index()],
                         }),
                 )
                 .chain(permutation.open(pk, x))
@@ -570,6 +644,35 @@ where
         .chain(vanishing.open(x));
 
     CS::multi_open(params, instances, transcript).map_err(|_| Error::ConstraintSystemFailure)
+}
+
+/// This creates a proof for the provided `circuit` when given the public
+/// parameters `params` and the proving key [`ProvingKey`] that was
+/// generated previously for the same circuit. The provided `instances`
+/// are zero-padded internally.
+pub fn create_proof<
+    F,
+    CS: PolynomialCommitmentScheme<F>,
+    T: Transcript,
+    ConcreteCircuit: Circuit<F>,
+>(
+    params: &CS::Parameters,
+    pk: &ProvingKey<F, CS>,
+    circuits: &[ConcreteCircuit],
+    instances: &[&[&[F]]],
+    mut rng: impl RngCore + CryptoRng,
+    transcript: &mut T,
+) -> Result<(), Error>
+where
+    CS::Commitment: Hashable<T::Hash>,
+    F: WithSmallOrderMulGroup<3>
+        + Sampleable<T::Hash>
+        + Hashable<T::Hash>
+        + Ord
+        + FromUniformBytes<64>,
+{
+    let tmp = compute_trace(params, pk, circuits, instances, rng, transcript)?;
+    finalise_proof(params, pk, &tmp, transcript)
 }
 
 #[test]

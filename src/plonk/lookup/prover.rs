@@ -22,14 +22,15 @@ pub(crate) struct Permuted<F: PrimeField> {
     permuted_table_poly: Polynomial<F, Coeff>,
 }
 
-#[derive(Debug)]
+// TODO: Remove this clone
+#[derive(Clone, Debug)]
 pub(crate) struct Committed<F: PrimeField> {
     pub(crate) permuted_input_poly: Polynomial<F, Coeff>,
     pub(crate) permuted_table_poly: Polynomial<F, Coeff>,
     pub(crate) product_poly: Polynomial<F, Coeff>,
 }
 
-pub(in crate::plonk) struct Evaluated<F: PrimeField> {
+pub(crate) struct Evaluated<F: PrimeField> {
     constructed: Committed<F>,
 }
 
@@ -278,7 +279,7 @@ impl<F: WithSmallOrderMulGroup<3>> Permuted<F> {
 }
 
 impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
-    pub(in crate::plonk) fn evaluate<T: Transcript, CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn evaluate<T: Transcript, CS: PolynomialCommitmentScheme<F>>(
         self,
         pk: &ProvingKey<F, CS>,
         x: F,
@@ -313,7 +314,7 @@ impl<F: WithSmallOrderMulGroup<3>> Committed<F> {
 }
 
 impl<F: WithSmallOrderMulGroup<3>> Evaluated<F> {
-    pub(in crate::plonk) fn open<'a, CS: PolynomialCommitmentScheme<F>>(
+    pub(crate) fn open<'a, CS: PolynomialCommitmentScheme<F>>(
         &'a self,
         pk: &'a ProvingKey<F, CS>,
         x: F,
