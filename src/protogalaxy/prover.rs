@@ -4,26 +4,23 @@
 
 use std::marker::PhantomData;
 
-use ff::{Field, FromUniformBytes, PrimeField, WithSmallOrderMulGroup};
-use rand_core::{CryptoRng, RngCore};
+use crate::plonk::permutation;
+use crate::utils::arithmetic::eval_polynomial;
+use ff::{PrimeField, WithSmallOrderMulGroup};
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 
 use crate::plonk::{
-    permutation,
     traces::{LiftedFoldingTrace, Trace},
-    Any, Assignment, Circuit, ConstraintSystem, Evaluator, FloorPlanner, ProvingKey, VerifyingKey,
+    Any, ConstraintSystem, Evaluator, ProvingKey, VerifyingKey,
 };
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::poly::{
-    Basis, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
+    Coeff, EvaluationDomain, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation,
 };
 use crate::protogalaxy::utils::{linear_combination, pow_vec};
-use crate::transcript::Hashable;
-use crate::transcript::Sampleable;
-use crate::transcript::Transcript;
-use crate::utils::arithmetic::{eval_polynomial, parallelize};
+use crate::utils::arithmetic::parallelize;
 
 /// PK used for folding. All traces being folded need to be valid for the same FoldingPk.
 #[derive(Clone)]
@@ -33,7 +30,11 @@ pub(crate) struct FoldingPk<F: PrimeField> {
     l0: Polynomial<F, LagrangeCoeff>,
     l_last: Polynomial<F, LagrangeCoeff>,
     l_active_row: Polynomial<F, LagrangeCoeff>,
-    permutation: permutation::ProvingKey<F>,
+    // The following three were groupped in a type called permutation::ProverKey.
+    // We prefix them here to avoid creating a new type.
+    permutation_pk_permutations: Vec<Polynomial<F, LagrangeCoeff>>,
+    permutation_pk_polys: Vec<Polynomial<F, Coeff>>,
+    permutation_pk_cosets: Vec<Polynomial<F, LagrangeCoeff>>,
     ev: Evaluator<F>,
 }
 
@@ -51,7 +52,9 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>> FoldingPk<F> {
             l0,
             l_last,
             l_active_row,
-            permutation,
+            permutation_pk_permutations,
+            permutation_pk_polys,
+            permutation_pk_cosets,
             ev,
             ..
         } = self;
@@ -81,7 +84,17 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>> FoldingPk<F> {
             fixed_values,
             fixed_polys,
             fixed_cosets,
-            permutation,
+            permutation: permutation::ProvingKey {
+                permutations: permutation_pk_permutations,
+                polys: permutation_pk_polys,
+                cosets: permutation_pk_cosets
+                    .into_iter()
+                    .map(|poly| {
+                        let poly = vk.domain.lagrange_to_coeff(poly);
+                        vk.domain.coeff_to_extended(poly)
+                    })
+                    .collect(),
+            },
             ev,
         }
     }
@@ -123,7 +136,11 @@ impl<F: PrimeField + WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F
             l0,
             l_last,
             l_active_row,
-            permutation: pk.permutation,
+            permutation_pk_permutations: pk.permutation.permutations.clone(),
+            permutation_pk_polys: pk.permutation.polys.clone(),
+            permutation_pk_cosets: (pk.permutation.cosets.into_iter())
+                .map(|poly| domain.extended_to_lagrange(poly))
+                .collect(),
             ev: pk.ev,
             domain,
         }
@@ -193,7 +210,7 @@ where
         let blinding_factors = pk.cs.blinding_factors();
         let last_rotation = Rotation(-((blinding_factors + 1) as i32));
         let chunk_len = pk.cs.degree() - 2;
-        let delta_start = domain.g_coset * beta;
+        let delta_start = *beta; //* domain.g_coset;
 
         let permutation_product_cosets: Vec<Polynomial<F, LagrangeCoeff>> = sets
             .iter()
@@ -239,7 +256,7 @@ where
         for ((permutation_product_coset, columns), cosets) in permutation_product_cosets
             .iter()
             .zip(p.columns.chunks(chunk_len))
-            .zip(pk.permutation.cosets.chunks(chunk_len))
+            .zip(pk.permutation_pk_cosets.chunks(chunk_len))
         {
             let mut left = permutation_product_coset[r_next];
             for (values, permutation) in columns
@@ -251,7 +268,7 @@ where
                 })
                 .zip(cosets.iter())
             {
-                left *= values[row_idx] + permutation[row_idx] * beta + gamma;
+                left *= values[row_idx] + *beta * permutation[row_idx] + gamma;
             }
 
             let mut right = permutation_product_coset[row_idx];
@@ -273,9 +290,9 @@ where
         // Polynomials required for this lookup.
         // Calculated here so these only have to be kept in memory for the short time
         // they are actually needed.
-        let product_coset = domain.coeff_to_lagrange(lookup.product_poly.clone());
-        let permuted_input_coset = domain.coeff_to_lagrange(lookup.permuted_input_poly.clone());
-        let permuted_table_coset = domain.coeff_to_lagrange(lookup.permuted_table_poly.clone());
+        let product = domain.coeff_to_lagrange(lookup.product_poly.clone());
+        let permuted_input = domain.coeff_to_lagrange(lookup.permuted_input_poly.clone());
+        let permuted_table = domain.coeff_to_lagrange(lookup.permuted_table_poly.clone());
 
         // Lookup constraints
         let lookup_evaluator = &pk.ev.lookups[n];
@@ -299,23 +316,22 @@ where
         let r_next = crate::plonk::evaluation::get_rotation_idx(row_idx, 1, rot_scale, isize);
         let r_prev = crate::plonk::evaluation::get_rotation_idx(row_idx, -1, rot_scale, isize);
 
-        let a_minus_s = permuted_input_coset[row_idx] - permuted_table_coset[row_idx];
+        let a_minus_s = permuted_input[row_idx] - permuted_table[row_idx];
         // l_0(X) * (1 - z(X)) = 0
-        value = value * y + ((one - product_coset[row_idx]) * l0[row_idx]);
+        value = value * y + ((one - product[row_idx]) * l0[row_idx]);
         // l_last(X) * (z(X)^2 - z(X)) = 0
         value = value * y
-            + ((product_coset[row_idx] * product_coset[row_idx] - product_coset[row_idx])
-                * l_last[row_idx]);
+            + ((product[row_idx] * product[row_idx] - product[row_idx]) * l_last[row_idx]);
         // (1 - (l_last(X) + l_blind(X))) * (
         //   z(\omega X) (a'(X) + \beta) (s'(X) + \gamma)
         //   - z(X) (\theta^{m-1} a_0(X) + ... + a_{m-1}(X) + \beta)
         //          (\theta^{m-1} s_0(X) + ... + s_{m-1}(X) + \gamma)
         // ) = 0
         value = value * y
-            + ((product_coset[r_next]
-                * (permuted_input_coset[row_idx] + beta)
-                * (permuted_table_coset[row_idx] + gamma)
-                - product_coset[row_idx] * table_value)
+            + ((product[r_next]
+                * (permuted_input[row_idx] + beta)
+                * (permuted_table[row_idx] + gamma)
+                - product[row_idx] * table_value)
                 * l_active_row[row_idx]);
         // Check that the first values in the permuted input expression and permuted
         // fixed expression are the same.
@@ -327,7 +343,7 @@ where
         // (1 - (l_last + l_blind)) * (a′(X) − s′(X))⋅(a′(X) − a′(\omega^{-1} X)) = 0
         value = value * y
             + (a_minus_s
-                * (permuted_input_coset[row_idx] - permuted_input_coset[r_prev])
+                * (permuted_input[row_idx] - permuted_input[r_prev])
                 * l_active_row[row_idx]);
     }
 
@@ -423,13 +439,16 @@ mod tests {
 
     use blstrs::{Bls12, Scalar as Fp};
     use ff::Field;
-    use rand_core::{OsRng, RngCore};
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+    use rand_core::RngCore;
 
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
+    use crate::dev::MockProver;
     use crate::plonk::traces::batch_traces;
     use crate::plonk::{
-        compute_trace, create_proof, keygen_pk, keygen_vk_with_k, Advice, Circuit, Column,
-        ConstraintSystem, Error, Expression, Selector, TableColumn,
+        compute_trace, keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem,
+        Error, Expression, Selector, TableColumn,
     };
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
@@ -445,9 +464,12 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct MyConfig {
-        selector: Selector,
+        mul_selector: Selector,
+        table_selector: Selector,
         table: TableColumn,
-        advice: Column<Advice>,
+        a: Column<Advice>,
+        b: Column<Advice>,
+        c: Column<Advice>,
     }
 
     impl Circuit<Fp> for TestCircuit {
@@ -464,19 +486,31 @@ mod tests {
 
         fn configure(meta: &mut ConstraintSystem<Fp>) -> MyConfig {
             let config = MyConfig {
-                selector: meta.complex_selector(),
+                mul_selector: meta.complex_selector(),
+                table_selector: meta.complex_selector(),
                 table: meta.lookup_table_column(),
-                advice: meta.advice_column(),
+                a: meta.advice_column(),
+                b: meta.advice_column(),
+                c: meta.advice_column(),
             };
 
+            meta.enable_equality(config.a);
+            meta.enable_equality(config.b);
+
+            meta.create_gate("mul", |meta| {
+                let a = meta.query_advice(config.a, Rotation::cur());
+                let b = meta.query_advice(config.b, Rotation::cur());
+                let c = meta.query_advice(config.c, Rotation::cur());
+                let q = meta.query_selector(config.mul_selector);
+                vec![q * (a * b - c)]
+            });
+
             meta.lookup("lookup", |meta| {
-                let selector = meta.query_selector(config.selector);
+                let selector = meta.query_selector(config.table_selector);
                 let not_selector = Expression::Constant(Fp::ONE) - selector.clone();
-                let advice = meta.query_advice(config.advice, Rotation::cur());
-                vec![(
-                    selector * advice + not_selector.clone() * not_selector.clone() * not_selector,
-                    config.table,
-                )]
+
+                let a = meta.query_advice(config.a, Rotation::cur());
+                vec![(selector * a + not_selector, config.table)]
             });
 
             config
@@ -507,18 +541,19 @@ mod tests {
                 || "assign values",
                 |mut region| {
                     for (offset, val) in self.witness.into_iter().enumerate() {
-                        config.selector.enable(&mut region, offset as usize)?;
-                        region.assign_advice(
-                            || format!("offset {offset}"),
-                            config.advice,
-                            offset,
-                            || val,
-                        )?;
+                        config.table_selector.enable(&mut region, offset as usize)?;
+                        config.mul_selector.enable(&mut region, offset as usize)?;
+                        let a = region.assign_advice(|| "a", config.a, offset, || val)?;
+                        a.copy_advice(|| "copy a to b", &mut region, config.b, offset)?;
+                        // region.assign_advice(|| "b", config.b, offset, || val)?;
+                        region.assign_advice(|| "c", config.c, offset, || val.map(|v| v * v))?;
                     }
 
                     Ok(())
                 },
-            )
+            )?;
+
+            Ok(())
         }
     }
 
@@ -526,10 +561,13 @@ mod tests {
     fn folding_test() {
         const K: u32 = 9;
         let k = 4;
-        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, OsRng);
 
+        let rng = ChaCha8Rng::from_seed([0u8; 32]);
+        let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(K, rng);
+
+        let mut rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut rand_bytes = [0u8; 1 << 8];
-        OsRng.fill_bytes(&mut rand_bytes);
+        rng.fill_bytes(&mut rand_bytes);
 
         let witness_1 = rand_bytes
             .into_iter()
@@ -539,7 +577,10 @@ mod tests {
             .unwrap();
         let circuit1 = TestCircuit { witness: witness_1 };
 
-        OsRng.fill_bytes(&mut rand_bytes);
+        MockProver::run(10, &circuit1, vec![])
+            .unwrap()
+            .assert_satisfied();
+        rng.fill_bytes(&mut rand_bytes);
 
         let witness_2 = rand_bytes
             .into_iter()
@@ -549,7 +590,7 @@ mod tests {
             .unwrap();
         let circuit2 = TestCircuit { witness: witness_2 };
 
-        OsRng.fill_bytes(&mut rand_bytes);
+        rng.fill_bytes(&mut rand_bytes);
 
         let witness_3 = rand_bytes
             .into_iter()
@@ -559,7 +600,7 @@ mod tests {
             .unwrap();
         let circuit3 = TestCircuit { witness: witness_3 };
 
-        OsRng.fill_bytes(&mut rand_bytes);
+        rng.fill_bytes(&mut rand_bytes);
 
         let witness_4 = rand_bytes
             .into_iter()
@@ -573,46 +614,30 @@ mod tests {
             .expect("keygen_vk should not fail");
         let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
 
-        // Compute real proofs:
-        let now = Instant::now();
-        let mut transcript_1 = CircuitTranscript::init();
-        let proof_1 = create_proof(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
-            .expect("Failed to compute first proof");
-
-        let mut transcript_2 = CircuitTranscript::init();
-        let proof_2 = create_proof(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
-            .expect("Failed to compute first proof");
-
-        let mut transcript_3 = CircuitTranscript::init();
-        let proof_3 = create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
-            .expect("Failed to compute first proof");
-
-        let mut transcript_4 = CircuitTranscript::init();
-        let proof_4 = create_proof(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
-            .expect("Failed to compute first proof");
-
-        println!("Create three proofs: {:?}", now.elapsed().as_millis());
-
         // Compute folding traces
         let now = Instant::now();
+        let rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut transcript_1 = CircuitTranscript::init();
         let folding_trace_1 =
-            compute_trace(&params, &pk, &[circuit1], &[&[]], OsRng, &mut transcript_1)
+            compute_trace(&params, &pk, &[circuit1], &[&[]], rng, &mut transcript_1)
                 .expect("Failed to compute the folding trace");
 
+        let rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut transcript_2 = CircuitTranscript::init();
         let folding_trace_2 =
-            compute_trace(&params, &pk, &[circuit2], &[&[]], OsRng, &mut transcript_2)
+            compute_trace(&params, &pk, &[circuit2], &[&[]], rng, &mut transcript_2)
                 .expect("Failed to compute the folding trace");
 
+        let rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut transcript_3 = CircuitTranscript::init();
         let folding_trace_3 =
-            compute_trace(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_3)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], rng, &mut transcript_3)
                 .expect("Failed to compute the folding trace");
 
+        let rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut transcript_4 = CircuitTranscript::init();
         let folding_trace_4 =
-            compute_trace(&params, &pk, &[circuit3], &[&[]], OsRng, &mut transcript_4)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], rng, &mut transcript_4)
                 .expect("Failed to compute the folding trace");
 
         println!("Compute three traces: {:?}", now.elapsed().as_millis());
@@ -620,7 +645,9 @@ mod tests {
         let now = Instant::now();
         let degree = pk.vk.cs.degree() as u32;
         let k_log2_ceil = (k as f64 - 1.).log2() as u32 + 1;
-        let dk_domain = EvaluationDomain::new(degree, k_log2_ceil);
+        // We must increase the degree, since we need to count y as a variable.
+        // Computing the real degree seems hard.
+        let dk_domain = EvaluationDomain::new(degree + 3, k_log2_ceil);
         let folding_pk = FoldingPk::from(pk);
 
         let lifted_trace = batch_traces(
@@ -635,32 +662,28 @@ mod tests {
         println!("Batch three traces: {:?}", now.elapsed().as_millis());
         let now = Instant::now();
 
+        let mut rng = ChaCha8Rng::from_seed([0u8; 32]);
         let mut betas = [Fp::ONE; K as usize];
-        // let mut beta_pow = Fp::random(OsRng);
-        // for beta in betas.iter_mut() {
-        //     *beta = beta_pow;
-        //     beta_pow *= beta_pow
-        // }
+        let mut beta_pow = Fp::random(&mut rng);
+        for beta in betas.iter_mut() {
+            *beta = beta_pow;
+            beta_pow *= beta_pow
+        }
 
         let poly_g = compute_poly_g(&folding_pk, &dk_domain, &betas, &lifted_trace);
-        let poly_g_coeff = dk_domain.extended_to_coeff(poly_g.clone());
+
+        dbg!(&poly_g);
+
+        println!("G poly: {:?}", now.elapsed().as_millis());
 
         let poly_k = dk_domain.divide_by_vanishing_poly(poly_g.clone());
 
-        let gamma = Fp::random(OsRng);
-
-        for exponent in 0..4 {
-            let res = eval_polynomial(
-                &poly_g_coeff,
-                dk_domain.get_omega().pow_vartime(&[exponent as u64]),
-            );
-            assert_eq!(res, Fp::ZERO);
-        }
+        let gamma = Fp::random(&mut rng);
 
         let poly_k_coeff = dk_domain.extended_to_coeff(poly_k);
 
         // Final check. Eval G(X), K(X) and Z(X) in \gamma
-        let g_in_gamma = eval_polynomial(&poly_g_coeff, gamma);
+        let g_in_gamma = dk_domain.eval_extended_lagrange(poly_g, gamma);
         let k_in_gamma = eval_polynomial(&poly_k_coeff, gamma);
         let z_in_gamma = gamma.pow_vartime(&[dk_domain.n]) - Fp::ONE;
 

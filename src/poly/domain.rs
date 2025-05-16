@@ -1,7 +1,7 @@
 //! Contains utilities for performing polynomial arithmetic over an evaluation
 //! domain that is of a suitable size for the application.
 
-use crate::utils::arithmetic::parallelize;
+use crate::utils::arithmetic::{eval_polynomial, parallelize};
 
 use super::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation};
 use ff::WithSmallOrderMulGroup;
@@ -237,7 +237,6 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     pub fn coeff_to_lagrange(&self, mut a: Polynomial<F, Coeff>) -> Polynomial<F, LagrangeCoeff> {
         assert_eq!(a.values.len(), 1 << self.k);
 
-        a.values.resize(self.n as usize, F::ZERO);
         best_fft(&mut a.values, self.omega, self.k);
 
         Polynomial {
@@ -269,8 +268,82 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     ///
     /// This function will panic if the provided vector is not the correct
     /// length.
-    // TODO/FIXME: caller should be responsible for truncating
+    ///
+    /// # WARNING
+    ///
+    /// This function truncates the coefficients, with the hidden assumption that
+    /// the degree of the polynomial is less than `n * quotient_poly_degree`.
     pub fn extended_to_coeff(&self, mut a: Polynomial<F, ExtendedLagrangeCoeff>) -> Vec<F> {
+        assert_eq!(a.values.len(), self.extended_len());
+
+        // Inverse FFT
+        Self::ifft(
+            &mut a.values,
+            self.extended_omega_inv,
+            self.extended_k,
+            self.extended_ifft_divisor,
+        );
+
+        // Distribute powers to move from coset; opposite from the
+        // transformation we performed earlier.
+        // TODO: Doing this after truncation would be faster.
+        self.distribute_powers_zeta(&mut a.values, false);
+
+        // Truncate it to match the size of the quotient polynomial; the
+        // evaluation domain might be slightly larger than necessary because
+        // it always lies on a power-of-two boundary.
+        a.values
+            .truncate((&self.n * self.quotient_poly_degree) as usize);
+
+        a.values
+    }
+
+    /// This takes us from the extended evaluation domain and gets us to the
+    /// small evaluation domain (of size `n`).
+    ///
+    /// This function will panic if the provided vector is not the correct
+    /// length.
+    pub fn extended_to_lagrange(
+        &self,
+        mut a: Polynomial<F, ExtendedLagrangeCoeff>,
+    ) -> Polynomial<F, LagrangeCoeff> {
+        assert_eq!(a.values.len(), self.extended_len());
+        // Alternative method that does not allow us to get
+        // rid of the zeta power, because we do not pass
+        // through coefficient form.
+        //
+        // let d = self.extended_len() / self.n as usize;
+
+        // let mut values = Vec::with_capacity(self.n as usize);
+        // for i in 0..(self.n as usize) {
+        //     values.push(a.values[d * i]);
+        // }
+
+        // return Polynomial {
+        //     values: values,
+        //     _marker: PhantomData,
+        // };
+
+        Self::ifft(
+            &mut a.values,
+            self.extended_omega_inv,
+            self.extended_k,
+            self.extended_ifft_divisor,
+        );
+
+        a.values.truncate(self.n as usize);
+        self.distribute_powers_zeta(&mut a.values, false);
+
+        best_fft(&mut a.values, self.omega, self.k);
+
+        Polynomial {
+            values: a.values,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Evaluates the polynomial in the given point.
+    pub fn eval_extended_lagrange(&self, mut a: Polynomial<F, ExtendedLagrangeCoeff>, x: F) -> F {
         assert_eq!(a.values.len(), self.extended_len());
 
         // Inverse FFT
@@ -285,13 +358,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         // transformation we performed earlier.
         self.distribute_powers_zeta(&mut a.values, false);
 
-        // Truncate it to match the size of the quotient polynomial; the
-        // evaluation domain might be slightly larger than necessary because
-        // it always lies on a power-of-two boundary.
-        a.values
-            .truncate((&self.n * self.quotient_poly_degree) as usize);
-
-        a.values
+        eval_polynomial(&a.values, x)
     }
 
     /// This divides the polynomial (in the extended domain) by the vanishing
