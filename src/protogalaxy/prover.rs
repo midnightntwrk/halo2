@@ -446,10 +446,7 @@ mod tests {
     use crate::circuit::{Layouter, SimpleFloorPlanner, Value};
     use crate::dev::MockProver;
     use crate::plonk::traces::batch_traces;
-    use crate::plonk::{
-        compute_trace, keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem,
-        Error, Expression, Selector, TableColumn,
-    };
+    use crate::plonk::{compute_trace, keygen_pk, keygen_vk_with_k, Advice, Circuit, Column, ConstraintSystem, Error, Expression, Selector, TableColumn, finalise_proof};
     use crate::poly::kzg::params::ParamsKZG;
     use crate::poly::kzg::KZGCommitmentScheme;
     use crate::poly::{EvaluationDomain, Rotation};
@@ -616,28 +613,22 @@ mod tests {
 
         // Compute folding traces
         let now = Instant::now();
-        let rng = ChaCha8Rng::from_seed([0u8; 32]);
-        let mut transcript_1 = CircuitTranscript::init();
+        let mut rng = ChaCha8Rng::from_seed([0u8; 32]);
+        let mut transcript = CircuitTranscript::init();
         let folding_trace_1 =
-            compute_trace(&params, &pk, &[circuit1], &[&[]], rng, &mut transcript_1)
+            compute_trace(&params, &pk, &[circuit1], &[&[]], &mut rng, &mut transcript)
                 .expect("Failed to compute the folding trace");
 
-        let rng = ChaCha8Rng::from_seed([0u8; 32]);
-        let mut transcript_2 = CircuitTranscript::init();
         let folding_trace_2 =
-            compute_trace(&params, &pk, &[circuit2], &[&[]], rng, &mut transcript_2)
+            compute_trace(&params, &pk, &[circuit2], &[&[]], &mut rng, &mut transcript)
                 .expect("Failed to compute the folding trace");
 
-        let rng = ChaCha8Rng::from_seed([0u8; 32]);
-        let mut transcript_3 = CircuitTranscript::init();
         let folding_trace_3 =
-            compute_trace(&params, &pk, &[circuit3], &[&[]], rng, &mut transcript_3)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], &mut rng, &mut transcript)
                 .expect("Failed to compute the folding trace");
 
-        let rng = ChaCha8Rng::from_seed([0u8; 32]);
-        let mut transcript_4 = CircuitTranscript::init();
         let folding_trace_4 =
-            compute_trace(&params, &pk, &[circuit3], &[&[]], rng, &mut transcript_4)
+            compute_trace(&params, &pk, &[circuit3], &[&[]], &mut rng, &mut transcript)
                 .expect("Failed to compute the folding trace");
 
         println!("Compute three traces: {:?}", now.elapsed().as_millis());
@@ -699,5 +690,10 @@ mod tests {
             ],
             &gamma,
         );
+
+        let final_pk = folding_pk.to_proving_key(&folded_trace, &vk);
+        finalise_proof(&params, &final_pk, &[folded_trace], &mut transcript).expect("Failed to finalise proof");
+
+
     }
 }
