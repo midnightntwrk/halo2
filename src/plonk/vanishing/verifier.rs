@@ -99,9 +99,8 @@ impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> PartiallyEvaluated<F, CS>
             .h_commitments
             .into_iter()
             .rev()
-            .fold(CS::Commitment::default(), |acc, commitment| {
-                (commitment + (acc * xn).into()).into()
-            });
+            .reduce(|acc, commitment| commitment + (acc * xn))
+            .expect("H commitments should not be empty");
 
         Evaluated {
             h_commitment,

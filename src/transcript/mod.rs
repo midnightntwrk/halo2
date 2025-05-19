@@ -71,8 +71,10 @@ pub trait Transcript {
     /// Returns the buffer with the proof.
     fn finalize(self) -> Vec<u8>;
 
-    /// Checks for extra trailing bytes, failing if there are any.
-    fn check_empty(&mut self) -> io::Result<()>;
+    /// Checks that the transcript is empty.
+    /// This is used to make sure a transcript does not contain trailing bytes at the end of
+    /// a proof verification.
+    fn assert_empty(&mut self) -> io::Result<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -134,11 +136,8 @@ impl<H: TranscriptHash> Transcript for CircuitTranscript<H> {
         self.buffer.into_inner()
     }
 
-    fn check_empty(&mut self) -> io::Result<()> {
-        let mut trailing_byte = vec![0u8; 0];
-        self.buffer.read_exact(&mut trailing_byte)?;
-
-        if trailing_byte.is_empty() {
+    fn assert_empty(&mut self) -> io::Result<()> {
+        if self.buffer.get_ref().len() == self.buffer.position() as usize {
             return Ok(());
         }
 

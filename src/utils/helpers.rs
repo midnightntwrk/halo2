@@ -2,8 +2,7 @@
 
 use crate::poly::Polynomial;
 use ff::PrimeField;
-use group::prime::PrimeCurveAffine;
-use group::GroupEncoding;
+use group::{Curve, GroupEncoding};
 use halo2curves::serde::SerdeObject;
 use std::io;
 
@@ -59,7 +58,7 @@ pub(crate) fn read_f<F: PrimeField + SerdeObject, R: io::Read>(
 }
 
 /// Trait for serialising SerdeObjects
-impl<C: PrimeCurveAffine + SerdeObject + Default> ProcessedSerdeObject for C {
+impl<C: Curve + SerdeObject + Default + GroupEncoding> ProcessedSerdeObject for C {
     /// Reads an element from the buffer and parses it according to the `format`:
     /// - `Processed`: Reads a compressed curve element and decompress it
     /// - `RawBytes`: Reads an uncompressed curve element with coordinates in Montgomery form.

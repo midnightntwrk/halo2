@@ -134,9 +134,10 @@ impl<F: WithSmallOrderMulGroup<3>> Constructed<F> {
         let xn: F = x.pow_vartime([domain.n]);
         let h_poly = self
             .h_pieces
-            .iter()
+            .into_iter()
             .rev()
-            .fold(domain.empty_coeff(), |acc, eval| acc * xn + eval);
+            .reduce(|acc, eval| acc * xn + eval)
+            .expect("H pieces should not be empty");
 
         let random_eval = eval_polynomial(&self.committed.random_poly, x);
         transcript.write(&random_eval)?;

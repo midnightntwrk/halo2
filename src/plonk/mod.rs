@@ -215,6 +215,8 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
         for commitment in &vk.fixed_commitments {
             buffer.extend_from_slice(&commitment.to_raw_bytes())
         }
+
+        buffer.extend_from_slice(&(vk.permutation.commitments().len() as u32).to_le_bytes());
         for commitment in vk.permutation.commitments() {
             buffer.extend_from_slice(&commitment.to_raw_bytes())
         }

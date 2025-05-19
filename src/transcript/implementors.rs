@@ -4,7 +4,7 @@ use crate::transcript::{
 use blake2b_simd::{Params, State as Blake2bState};
 use ff::{FromUniformBytes, PrimeField};
 use group::GroupEncoding;
-use halo2curves::bn256::{Fr, G1Affine};
+use halo2curves::bn256::{Fr, G1};
 use std::io;
 use std::io::Read;
 
@@ -34,7 +34,7 @@ impl TranscriptHash for Blake2bState {
 /// Implementation of Hashable for BN with Blake //
 ///////////////////////////////////////////////////
 
-impl Hashable<Blake2bState> for G1Affine {
+impl Hashable<Blake2bState> for G1 {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         Hashable::to_bytes(self)
@@ -88,7 +88,7 @@ impl Sampleable<Blake2bState> for Fr {
 /// Implementation of Hashable for BLS12-381 with Blake //
 //////////////////////////////////////////////////////////
 
-impl Hashable<Blake2bState> for blstrs::G1Affine {
+impl Hashable<Blake2bState> for blstrs::G1Projective {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         Hashable::to_bytes(self)
@@ -145,7 +145,7 @@ impl Sampleable<Blake2bState> for blstrs::Scalar {
     }
 }
 
-impl Hashable<Blake2bState> for halo2curves::bls12381::G1Affine {
+impl Hashable<Blake2bState> for halo2curves::bls12381::G1 {
     /// Converts it to compressed form in bytes
     fn to_input(&self) -> Vec<u8> {
         Hashable::to_bytes(self)

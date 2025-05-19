@@ -7,7 +7,7 @@ use core::ops::{Add, Mul};
 use ff::{FromUniformBytes, PrimeField};
 use std::fmt::Debug;
 
-/// Public interface for a Polynomial Commitment Scheme (PCS)
+/// Public interface for a additively homomorphic Polynomial Commitment Scheme (PCS)
 pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     /// Parameters needed to generate a proof in the PCS
     type Parameters: Params;
@@ -15,20 +15,17 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     /// Parameters needed to verify a proof in the PCS
     type VerifierParameters;
 
-    /// Output of scalar multiplication for a Self::Commitment
-    type Output: Into<Self::Commitment>;
     /// Type of a committed polynomial
     type Commitment: Clone
         + Copy
-        + Default
         + Debug
         + Default
         + PartialEq
         + ProcessedSerdeObject
         + Send
         + Sync
-        + Add<Output = Self::Output>
-        + Mul<F, Output = Self::Output>;
+        + Add<Output = Self::Commitment>
+        + Mul<F, Output = Self::Commitment>;
 
     /// Verification guard. Allows for batch verification
     type VerificationGuard: Guard<F, Self>;

@@ -2,10 +2,10 @@
 //! field and polynomial arithmetic.
 
 pub use ff::Field;
-use group::prime::PrimeCurveAffine;
+use group::prime::{PrimeCurve, PrimeCurveAffine};
 use group::{
     ff::{BatchInvert, PrimeField},
-    Curve, GroupOpsOwned, ScalarMulOwned,
+    GroupOpsOwned, ScalarMulOwned,
 };
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
@@ -30,30 +30,22 @@ where
 }
 
 /// Convert coefficient bases group elements to lagrange basis by inverse FFT.
-pub fn g_to_lagrange<C: PrimeCurveAffine>(g_projective: Vec<C::Curve>, k: u32) -> Vec<C> {
+pub fn g_to_lagrange<C: PrimeCurve>(g_projective: &[C], k: u32) -> Vec<C> {
     let n_inv = C::Scalar::TWO_INV.pow_vartime([k as u64, 0, 0, 0]);
     let mut omega_inv = C::Scalar::ROOT_OF_UNITY_INV;
     for _ in k..C::Scalar::S {
         omega_inv = omega_inv.square();
     }
 
-    let mut g_lagrange_projective = g_projective;
-    best_fft(&mut g_lagrange_projective, omega_inv, k);
-    parallelize(&mut g_lagrange_projective, |g, _| {
+    let mut g_lagrange = g_projective.to_vec();
+    best_fft(&mut g_lagrange, omega_inv, k);
+    parallelize(&mut g_lagrange, |g, _| {
         for g in g.iter_mut() {
             *g *= n_inv;
         }
     });
 
-    let mut g_lagrange = vec![C::identity(); 1 << k];
-    parallelize(&mut g_lagrange, |g_lagrange, starts| {
-        C::Curve::batch_normalize(
-            &g_lagrange_projective[starts..(starts + g_lagrange.len())],
-            g_lagrange,
-        );
-    });
-
-    g_lagrange
+    g_lagrange.to_vec()
 }
 
 /// This evaluates a provided polynomial (in coefficient form) at `point`.
@@ -177,12 +169,14 @@ pub fn parallelize<T: Send, F: Fn(&mut [T], usize) + Send + Sync + Clone>(v: &mu
 /// Returns coefficients of an n - 1 degree polynomial given a set of n points
 /// and their evaluations. This function will panic if two values in `points`
 /// are the same.
-pub fn lagrange_interpolate<F: Field>(points: &[F], evals: &[F]) -> Vec<F> {
+pub fn lagrange_interpolate<F: Field + Ord>(points: &[F], evals: &[F]) -> Vec<F> {
     assert_eq!(points.len(), evals.len());
-    assert!(!points
-        .iter()
-        .enumerate()
-        .any(|(i, &item)| points.iter().skip(i + 1).any(|&x| x == item)));
+    {
+        let mut sorted_points = points.to_vec();
+        sorted_points.sort();
+        assert!(!sorted_points.windows(2).any(|w| w[0] == w[1]));
+    }
+
     if points.len() == 1 {
         // Constant polynomial
         vec![evals[0]]
