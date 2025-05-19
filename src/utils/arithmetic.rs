@@ -11,7 +11,7 @@ use std::fmt::Debug;
 use std::ops::{Add, Mul};
 
 use halo2curves::fft::best_fft;
-use halo2curves::pairing::{Engine, MultiMillerLoop};
+use halo2curves::pairing::MultiMillerLoop;
 pub use halo2curves::{CurveAffine, CurveExt};
 
 /// This represents an element of a group with basic operations that can be
@@ -282,7 +282,7 @@ pub(crate) fn inner_product<F: PrimeField, T: Mul<F, Output = T> + Add<T, Output
         .unwrap()
 }
 
-pub(crate) fn msm_inner_product<E: Engine>(
+pub(crate) fn msm_inner_product<E>(
     msms: &[MSMKZG<E>],
     scalars: impl Iterator<Item = E::Fr>,
 ) -> MSMKZG<E>
