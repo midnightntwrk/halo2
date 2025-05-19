@@ -1,544 +1,331 @@
-#![allow(clippy::many_single_char_names)]
-#![allow(clippy::op_ref)]
+#[macro_use]
+extern crate criterion;
 
-use assert_matches::assert_matches;
-use blake2b_simd::State;
-use ff::{FromUniformBytes, WithSmallOrderMulGroup};
+use group::ff::Field;
 use halo2_proofs::circuit::{Cell, Layouter, SimpleFloorPlanner, Value};
-use halo2_proofs::dev::MockProver;
-use halo2_proofs::plonk::{
-    create_proof as create_plonk_proof, keygen_pk, keygen_vk, keygen_vk_with_k,
-    prepare as prepare_plonk_proof, Advice, Circuit, Column, ConstraintSystem, Error, Fixed,
-    ProvingKey, TableColumn, VerifyingKey,
-};
-use halo2_proofs::poly::commitment::{Guard, PolynomialCommitmentScheme};
-use halo2_proofs::poly::kzg::params::ParamsKZG;
-use halo2_proofs::poly::kzg::KZGCommitmentScheme;
+use halo2_proofs::plonk::*;
 use halo2_proofs::poly::Rotation;
-use halo2_proofs::transcript::{CircuitTranscript, Hashable, Sampleable, Transcript};
-use halo2_proofs::utils::arithmetic::Field;
-use halo2_proofs::utils::rational::Rational;
-use halo2curves::serde::SerdeObject;
-use rand_core::{CryptoRng, OsRng, RngCore};
+use halo2curves::bn256;
+//use rand_core::OsRng;
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+
 use std::marker::PhantomData;
 
-#[test]
-fn plonk_api() {
-    const K: u32 = 5;
+use criterion::{BenchmarkId, Criterion};
+use halo2_proofs::poly::commitment::Guard;
+use halo2_proofs::poly::kzg::params::ParamsVerifierKZG;
+use halo2_proofs::poly::kzg::{params::ParamsKZG, KZGCommitmentScheme};
+use halo2_proofs::transcript::{CircuitTranscript, Transcript};
+use halo2_proofs::utils::rational::Rational;
+//use halo2curves::bn256::bn256;
 
-    #[derive(Clone)]
-    struct PlonkConfig {
-        a: Column<Advice>,
-        b: Column<Advice>,
-        c: Column<Advice>,
-        d: Column<Advice>,
-        e: Column<Advice>,
+use blstrs::{Bls12, Scalar as Fr, G1Affine};
+use halo2_proofs::{start_timer, end_timer};
+#[derive(Clone)]
+struct PlonkConfig {
+    a: Column<Advice>,
+    b: Column<Advice>,
+    c: Column<Advice>,
+    sa: Column<Fixed>,
+    sb: Column<Fixed>,
+    sc: Column<Fixed>,
+    sm: Column<Fixed>,
+    p: Column<Instance>,
+}
 
-        sa: Column<Fixed>,
-        sb: Column<Fixed>,
-        sc: Column<Fixed>,
-        sm: Column<Fixed>,
-        sp: Column<Fixed>,
-        sl: TableColumn,
-    }
-
-    #[allow(clippy::type_complexity)]
-    trait StandardCs<FF: Field> {
-        fn raw_multiply<F>(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
-        where
-            F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>;
-        fn raw_add<F>(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
-        where
-            F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>;
-        fn copy(&self, layouter: &mut impl Layouter<FF>, a: Cell, b: Cell) -> Result<(), Error>;
-        fn public_input<F>(&self, layouter: &mut impl Layouter<FF>, f: F) -> Result<Cell, Error>
-        where
-            F: FnMut() -> Value<FF>;
-        fn lookup_table(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            values: &[FF],
-        ) -> Result<(), Error>;
-    }
-
-    #[derive(Clone)]
-    struct MyCircuit<F: Field> {
-        a: Value<F>,
-        lookup_table: Vec<F>,
-    }
-
-    struct StandardPlonk<F: Field> {
-        config: PlonkConfig,
-        _marker: PhantomData<F>,
-    }
-
-    impl<FF: Field> StandardPlonk<FF> {
-        fn new(config: PlonkConfig) -> Self {
-            StandardPlonk {
-                config,
-                _marker: PhantomData,
-            }
-        }
-    }
-
-    impl<FF: Field> StandardCs<FF> for StandardPlonk<FF> {
-        fn raw_multiply<F>(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            mut f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
-        where
-            F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>,
-        {
-            layouter.assign_region(
-                || "raw_multiply",
-                |mut region| {
-                    let mut value = None;
-                    let lhs = region.assign_advice(
-                        || "lhs",
-                        self.config.a,
-                        0,
-                        || {
-                            value = Some(f());
-                            value.unwrap().map(|v| v.0)
-                        },
-                    )?;
-                    region.assign_advice(
-                        || "lhs^4",
-                        self.config.d,
-                        0,
-                        || value.unwrap().map(|v| v.0).square().square(),
-                    )?;
-                    let rhs = region.assign_advice(
-                        || "rhs",
-                        self.config.b,
-                        0,
-                        || value.unwrap().map(|v| v.1),
-                    )?;
-                    region.assign_advice(
-                        || "rhs^4",
-                        self.config.e,
-                        0,
-                        || value.unwrap().map(|v| v.1).square().square(),
-                    )?;
-                    let out = region.assign_advice(
-                        || "out",
-                        self.config.c,
-                        0,
-                        || value.unwrap().map(|v| v.2),
-                    )?;
-
-                    region.assign_fixed(|| "a", self.config.sa, 0, || Value::known(FF::ZERO))?;
-                    region.assign_fixed(|| "b", self.config.sb, 0, || Value::known(FF::ZERO))?;
-                    region.assign_fixed(|| "c", self.config.sc, 0, || Value::known(FF::ONE))?;
-                    region.assign_fixed(|| "a * b", self.config.sm, 0, || Value::known(FF::ONE))?;
-                    Ok((lhs.cell(), rhs.cell(), out.cell()))
-                },
-            )
-        }
-        fn raw_add<F>(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            mut f: F,
-        ) -> Result<(Cell, Cell, Cell), Error>
-        where
-            F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>,
-        {
-            layouter.assign_region(
-                || "raw_add",
-                |mut region| {
-                    let mut value = None;
-                    let lhs = region.assign_advice(
-                        || "lhs",
-                        self.config.a,
-                        0,
-                        || {
-                            value = Some(f());
-                            value.unwrap().map(|v| v.0)
-                        },
-                    )?;
-                    region.assign_advice(
-                        || "lhs^4",
-                        self.config.d,
-                        0,
-                        || value.unwrap().map(|v| v.0).square().square(),
-                    )?;
-                    let rhs = region.assign_advice(
-                        || "rhs",
-                        self.config.b,
-                        0,
-                        || value.unwrap().map(|v| v.1),
-                    )?;
-                    region.assign_advice(
-                        || "rhs^4",
-                        self.config.e,
-                        0,
-                        || value.unwrap().map(|v| v.1).square().square(),
-                    )?;
-                    let out = region.assign_advice(
-                        || "out",
-                        self.config.c,
-                        0,
-                        || value.unwrap().map(|v| v.2),
-                    )?;
-
-                    region.assign_fixed(|| "a", self.config.sa, 0, || Value::known(FF::ONE))?;
-                    region.assign_fixed(|| "b", self.config.sb, 0, || Value::known(FF::ONE))?;
-                    region.assign_fixed(|| "c", self.config.sc, 0, || Value::known(FF::ONE))?;
-                    region.assign_fixed(
-                        || "a * b",
-                        self.config.sm,
-                        0,
-                        || Value::known(FF::ZERO),
-                    )?;
-                    Ok((lhs.cell(), rhs.cell(), out.cell()))
-                },
-            )
-        }
-        fn copy(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            left: Cell,
-            right: Cell,
-        ) -> Result<(), Error> {
-            layouter.assign_region(
-                || "copy",
-                |mut region| {
-                    region.constrain_equal(left, right)?;
-                    region.constrain_equal(left, right)
-                },
-            )
-        }
-        fn public_input<F>(&self, layouter: &mut impl Layouter<FF>, mut f: F) -> Result<Cell, Error>
-        where
-            F: FnMut() -> Value<FF>,
-        {
-            layouter.assign_region(
-                || "public_input",
-                |mut region| {
-                    let value = region.assign_advice(|| "value", self.config.a, 0, &mut f)?;
-                    region.assign_fixed(
-                        || "public",
-                        self.config.sp,
-                        0,
-                        || Value::known(FF::ONE),
-                    )?;
-
-                    Ok(value.cell())
-                },
-            )
-        }
-        fn lookup_table(
-            &self,
-            layouter: &mut impl Layouter<FF>,
-            values: &[FF],
-        ) -> Result<(), Error> {
-            layouter.assign_table(
-                || "",
-                |mut table| {
-                    for (index, &value) in values.iter().enumerate() {
-                        table.assign_cell(
-                            || "table col",
-                            self.config.sl,
-                            index,
-                            || Value::known(value),
-                        )?;
-                    }
-                    Ok(())
-                },
-            )?;
-            Ok(())
-        }
-    }
-
-    impl<F: Field> Circuit<F> for MyCircuit<F> {
-        type Config = PlonkConfig;
-        type FloorPlanner = SimpleFloorPlanner;
-        #[cfg(feature = "circuit-params")]
-        type Params = ();
-
-        fn without_witnesses(&self) -> Self {
-            Self {
-                a: Value::unknown(),
-                lookup_table: self.lookup_table.clone(),
-            }
-        }
-
-        fn configure(meta: &mut ConstraintSystem<F>) -> PlonkConfig {
-            let e = meta.advice_column();
-            let a = meta.advice_column();
-            let b = meta.advice_column();
-            let sf = meta.fixed_column();
-            let c = meta.advice_column();
-            let d = meta.advice_column();
-            let p = meta.instance_column();
-
-            meta.enable_equality(a);
-            meta.enable_equality(b);
-            meta.enable_equality(c);
-
-            let sm = meta.fixed_column();
-            let sa = meta.fixed_column();
-            let sb = meta.fixed_column();
-            let sc = meta.fixed_column();
-            let sp = meta.fixed_column();
-            let sl = meta.lookup_table_column();
-
-            /*
-             *   A         B      ...  sl
-             * [
-             *   instance  0      ...  0
-             *   a         a      ...  0
-             *   a         a^2    ...  0
-             *   a         a      ...  0
-             *   a         a^2    ...  0
-             *   ...       ...    ...  ...
-             *   ...       ...    ...  instance
-             *   ...       ...    ...  a
-             *   ...       ...    ...  a
-             *   ...       ...    ...  0
-             * ]
-             */
-
-            meta.lookup("lookup", |meta| {
-                let a_ = meta.query_any(a, Rotation::cur());
-                vec![(a_, sl)]
-            });
-
-            meta.create_gate("Combined add-mult", |meta| {
-                let d = meta.query_advice(d, Rotation::next());
-                let a = meta.query_advice(a, Rotation::cur());
-                let sf = meta.query_fixed(sf, Rotation::cur());
-                let e = meta.query_advice(e, Rotation::prev());
-                let b = meta.query_advice(b, Rotation::cur());
-                let c = meta.query_advice(c, Rotation::cur());
-
-                let sa = meta.query_fixed(sa, Rotation::cur());
-                let sb = meta.query_fixed(sb, Rotation::cur());
-                let sc = meta.query_fixed(sc, Rotation::cur());
-                let sm = meta.query_fixed(sm, Rotation::cur());
-
-                vec![a.clone() * sa + b.clone() * sb + a * b * sm - (c * sc) + sf * (d * e)]
-            });
-
-            meta.create_gate("Public input", |meta| {
-                let a = meta.query_advice(a, Rotation::cur());
-                let p = meta.query_instance(p, Rotation::cur());
-                let sp = meta.query_fixed(sp, Rotation::cur());
-
-                vec![sp * (a - p)]
-            });
-
-            meta.enable_equality(sf);
-            meta.enable_equality(e);
-            meta.enable_equality(d);
-            meta.enable_equality(p);
-            meta.enable_equality(sm);
-            meta.enable_equality(sa);
-            meta.enable_equality(sb);
-            meta.enable_equality(sc);
-            meta.enable_equality(sp);
-
-            PlonkConfig {
-                a,
-                b,
-                c,
-                d,
-                e,
-                sa,
-                sb,
-                sc,
-                sm,
-                sp,
-                sl,
-            }
-        }
-
-        fn synthesize(
-            &self,
-            config: PlonkConfig,
-            mut layouter: impl Layouter<F>,
-        ) -> Result<(), Error> {
-            let cs = StandardPlonk::new(config);
-
-            let _ = cs.public_input(&mut layouter, || Value::known(F::ONE + F::ONE))?;
-
-            for _ in 0..10 {
-                let a: Value<Rational<_>> = self.a.into();
-                let mut a_squared = Value::unknown();
-                let (a0, _, c0) = cs.raw_multiply(&mut layouter, || {
-                    a_squared = a.square();
-                    a.zip(a_squared).map(|(a, a_squared)| (a, a, a_squared))
-                })?;
-                let (a1, b1, _) = cs.raw_add(&mut layouter, || {
-                    let fin = a_squared + a;
-                    a.zip(a_squared)
-                        .zip(fin)
-                        .map(|((a, a_squared), fin)| (a, a_squared, fin))
-                })?;
-                cs.copy(&mut layouter, a0, a1)?;
-                cs.copy(&mut layouter, b1, c0)?;
-            }
-
-            cs.lookup_table(&mut layouter, &self.lookup_table)?;
-
-            Ok(())
-        }
-    }
-
-    macro_rules! common {
-        ($field:ident) => {{
-            let a = $field::from(2834758237) * $field::ZETA;
-            let instance = $field::ONE + $field::ONE;
-            let lookup_table = vec![instance, a, a, $field::ZERO];
-            (a, instance, lookup_table)
-        }};
-    }
-
-    macro_rules! bad_keys {
-        ($field: ident, $scheme:ident) => {{
-            let (_, _, lookup_table) = common!($field);
-            let empty_circuit: MyCircuit<$field> = MyCircuit {
-                a: Value::unknown(),
-                lookup_table: lookup_table.clone(),
-            };
-
-            // Check that we get an error if we try to initialize the proving key with a value of
-            // k that is too small for the minimum required number of rows.
-            let much_too_small_params= <$scheme as PolynomialCommitmentScheme<$field>>::gen_params(1);
-            assert_matches!(
-                keygen_vk_with_k::<_, $scheme, _>(&much_too_small_params, &empty_circuit, 1),
-                Err(Error::NotEnoughRowsAvailable {
-                    current_k: 1,
-                })
-            );
-
-            // Check that we get an error if we try to initialize the proving key with a value of
-            // k that is too small for the number of rows the circuit uses.
-            let slightly_too_small_params = <$scheme as PolynomialCommitmentScheme<$field>>::gen_params(K-1);
-            assert_matches!(
-                keygen_vk_with_k::<_, $scheme, _>(&slightly_too_small_params, &empty_circuit, K - 1),
-                Err(Error::NotEnoughRowsAvailable {
-                    current_k,
-                }) if current_k == K - 1
-            );
-        }};
-    }
-
-    fn keygen<F, Scheme: PolynomialCommitmentScheme<F>>(
-        params: &mut Scheme::Parameters,
-    ) -> ProvingKey<F, Scheme>
+trait StandardCs<FF: Field> {
+    fn raw_multiply<F>(
+        &self,
+        layouter: &mut impl Layouter<FF>,
+        f: F,
+    ) -> Result<(Cell, Cell, Cell), Error>
     where
-        F: FromUniformBytes<64> + WithSmallOrderMulGroup<3> + Ord,
-    {
-        let (_, _, lookup_table) = common!(F);
-        let empty_circuit: MyCircuit<F> = MyCircuit {
-            a: Value::unknown(),
-            lookup_table,
-        };
+        F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>;
 
-        // Initialize the proving key
-        let vk = keygen_vk(params, &empty_circuit).expect("keygen_vk should not fail");
-
-        keygen_pk(vk, &empty_circuit).expect("keygen_pk should not fail")
-    }
-
-    fn create_proof<
-        F,
-        Scheme: PolynomialCommitmentScheme<F>,
-        T: Transcript,
-        R: RngCore + CryptoRng,
-    >(
-        rng: R,
-        params: &Scheme::Parameters,
-        pk: &ProvingKey<F, Scheme>,
-    ) -> Vec<u8>
+    fn raw_add<F>(
+        &self,
+        layouter: &mut impl Layouter<FF>,
+        f: F,
+    ) -> Result<(Cell, Cell, Cell), Error>
     where
-        F: Ord
-            + WithSmallOrderMulGroup<3>
-            + FromUniformBytes<64>
-            + Sampleable<T::Hash>
-            + Hashable<T::Hash>
-            + SerdeObject,
-        Scheme::Commitment: Hashable<T::Hash>,
+        F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>;
+
+    fn copy(&self, layouter: &mut impl Layouter<FF>, a: Cell, b: Cell) -> Result<(), Error>;
+}
+
+#[derive(Clone)]
+struct MyCircuit<F: Field> {
+    inputs: Vec<Value<F>>,
+}
+
+struct StandardPlonk<F: Field> {
+    config: PlonkConfig,
+    _marker: PhantomData<F>,
+}
+
+impl<FF: Field> StandardPlonk<FF> {
+    fn new(config: PlonkConfig) -> Self {
+        StandardPlonk { config, _marker: PhantomData }
+    }
+}
+
+impl<FF: Field> StandardCs<FF> for StandardPlonk<FF> {
+    fn raw_multiply<F>(
+        &self,
+        layouter: &mut impl Layouter<FF>,
+        mut f: F,
+    ) -> Result<(Cell, Cell, Cell), Error>
+    where
+        F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>,
     {
-        let (a, instance, lookup_table) = common!(F);
-
-        let circuit: MyCircuit<F> = MyCircuit {
-            a: Value::known(a),
-            lookup_table,
-        };
-
-        let mut transcript = T::init();
-
-        create_plonk_proof::<F, Scheme, _, _>(
-            params,
-            pk,
-            &[circuit.clone(), circuit.clone()],
-            &[&[&[instance]], &[&[instance]]],
-            rng,
-            &mut transcript,
+        layouter.assign_region(
+            || "raw_multiply",
+            |mut region| {
+                let mut value = None;
+                let lhs = region.assign_advice(
+                    || "lhs",
+                    self.config.a,
+                    0,
+                    || {
+                        value = Some(f());
+                        value.unwrap().map(|v| v.0)
+                    },
+                )?;
+                let rhs = region.assign_advice(
+                    || "rhs",
+                    self.config.b,
+                    0,
+                    || value.unwrap().map(|v| v.1),
+                )?;
+                let out = region.assign_advice(
+                    || "out",
+                    self.config.c,
+                    0,
+                    || value.unwrap().map(|v| v.2),
+                )?;
+                // selectors for multiplication
+                region.assign_fixed(|| "a_sel", self.config.sa, 0, || Value::known(FF::ZERO))?;
+                region.assign_fixed(|| "b_sel", self.config.sb, 0, || Value::known(FF::ZERO))?;
+                region.assign_fixed(|| "c_sel", self.config.sc, 0, || Value::known(FF::ONE))?;
+                region.assign_fixed(|| "m_sel", self.config.sm, 0, || Value::known(FF::ONE))?;
+                Ok((lhs.cell(), rhs.cell(), out.cell()))
+            },
         )
-        .expect("proof generation should not fail");
-
-        // Check this circuit is satisfied.
-        let prover = match MockProver::run(K, &circuit, vec![vec![instance]]) {
-            Ok(prover) => prover,
-            Err(e) => panic!("{e:?}"),
-        };
-        assert_eq!(prover.verify(), Ok(()));
-
-        transcript.finalize()
     }
 
-    fn verify_proof<F, Scheme: PolynomialCommitmentScheme<F>, T: Transcript>(
-        params_verifier: &Scheme::VerifierParameters,
-        vk: &VerifyingKey<F, Scheme>,
-        proof: &[u8],
-    ) where
-        F: Ord
-            + WithSmallOrderMulGroup<3>
-            + FromUniformBytes<64>
-            + Sampleable<T::Hash>
-            + Hashable<T::Hash>
-            + SerdeObject,
-        Scheme::Commitment: Hashable<T::Hash>,
+    fn raw_add<F>(
+        &self,
+        layouter: &mut impl Layouter<FF>,
+        mut f: F,
+    ) -> Result<(Cell, Cell, Cell), Error>
+    where
+        F: FnMut() -> Value<(Rational<FF>, Rational<FF>, Rational<FF>)>,
     {
-        let (_, instance, _) = common!(F);
-        let pubinputs = [instance];
-
-        let mut transcript = T::init_from_bytes(proof);
-
-        let verifier =
-            prepare_plonk_proof(vk, &[&[&pubinputs[..]], &[&pubinputs[..]]], &mut transcript)
-                .unwrap();
-
-        assert!(verifier.verify(params_verifier).is_ok());
+        layouter.assign_region(
+            || "raw_add",
+            |mut region| {
+                let mut value = None;
+                let lhs = region.assign_advice(
+                    || "lhs",
+                    self.config.a,
+                    0,
+                    || {
+                        value = Some(f());
+                        value.unwrap().map(|v| v.0)
+                    },
+                )?;
+                let rhs = region.assign_advice(
+                    || "rhs",
+                    self.config.b,
+                    0,
+                    || value.unwrap().map(|v| v.1),
+                )?;
+                let out = region.assign_advice(
+                    || "out",
+                    self.config.c,
+                    0,
+                    || value.unwrap().map(|v| v.2),
+                )?;
+                // selectors for addition
+                region.assign_fixed(|| "a_sel", self.config.sa, 0, || Value::known(FF::ONE))?;
+                region.assign_fixed(|| "b_sel", self.config.sb, 0, || Value::known(FF::ONE))?;
+                region.assign_fixed(|| "c_sel", self.config.sc, 0, || Value::known(FF::ONE))?;
+                region.assign_fixed(|| "m_sel", self.config.sm, 0, || Value::known(FF::ZERO))?;
+                Ok((lhs.cell(), rhs.cell(), out.cell()))
+            },
+        )
     }
 
-    use halo2curves::bn256::{Bn256, Fr};
+    fn copy(
+        &self,
+        layouter: &mut impl Layouter<FF>,
+        left: Cell,
+        right: Cell,
+    ) -> Result<(), Error> {
+        layouter.assign_region(|| "copy", |mut region| region.constrain_equal(left, right))
+    }
+}
 
-    type Scheme = KZGCommitmentScheme<Bn256>;
-    bad_keys!(Fr, Scheme);
+impl<F: Field> Circuit<F> for MyCircuit<F> {
+    type Config = PlonkConfig;
+    type FloorPlanner = SimpleFloorPlanner;
 
-    let rng = OsRng;
-    let mut params = ParamsKZG::<Bn256>::unsafe_setup(K, rng);
+    fn without_witnesses(&self) -> Self {
+        MyCircuit { inputs: vec![Value::unknown(); self.inputs.len()] }
+    }
 
-    let pk = keygen::<Fr, Scheme>(&mut params);
+    fn configure(meta: &mut ConstraintSystem<F>) -> PlonkConfig {
+        meta.set_minimum_degree(5);
+        let a = meta.advice_column();
+        let b = meta.advice_column();
+        let c = meta.advice_column();
+        meta.enable_equality(a);
+        meta.enable_equality(b);
+        meta.enable_equality(c);
 
-    let proof = create_proof::<Fr, Scheme, CircuitTranscript<State>, _>(rng, &params, &pk);
+        let sa = meta.fixed_column();
+        let sb = meta.fixed_column();
+        let sc = meta.fixed_column();
+        let sm = meta.fixed_column();
 
-    verify_proof::<_, _, CircuitTranscript<State>>(
-        &params.verifier_params(),
-        pk.get_vk(),
-        &proof[..],
-    );
+        let p = meta.instance_column();
+        meta.enable_equality(p);
+
+        meta.create_gate("Combined add-mult", |meta| {
+            let a_q = meta.query_advice(a, Rotation::cur());
+            let b_q = meta.query_advice(b, Rotation::cur());
+            let c_q = meta.query_advice(c, Rotation::cur());
+            let sa_q = meta.query_fixed(sa, Rotation::cur());
+            let sb_q = meta.query_fixed(sb, Rotation::cur());
+            let sc_q = meta.query_fixed(sc, Rotation::cur());
+            let sm_q = meta.query_fixed(sm, Rotation::cur());
+            vec![a_q.clone() * sa_q + b_q.clone() * sb_q + a_q * b_q * sm_q - (c_q * sc_q)]
+        });
+
+        PlonkConfig { a, b, c, sa, sb, sc, sm, p }
+    }
+
+    fn synthesize(
+        &self,
+        config: PlonkConfig,
+        mut layouter: impl Layouter<F>,
+    ) -> Result<(), Error> {
+        let cs = StandardPlonk::new(config.clone());
+        for (row, input) in self.inputs.iter().enumerate() {
+            let a: Value<Rational<_>> = (*input).into();
+            let mut a_squared = Value::unknown();
+            let (a0, _, c0) = cs.raw_multiply(&mut layouter, || {
+                a_squared = a.square();
+                a.zip(a_squared).map(|(a, a2)| (a, a, a2))
+            })?;
+            let (a1, b1, _) = cs.raw_add(&mut layouter, || {
+                let fin = a_squared + a;
+                a.zip(a_squared)
+                    .zip(fin)
+                    .map(|((a, a2), fin)| (a, a2, fin))
+            })?;
+            cs.copy(&mut layouter, a0, a1)?;
+            cs.copy(&mut layouter, b1, c0)?;
+
+            // Constrain `c0` to the public input at row `row`
+            layouter.constrain_instance(c0, config.p, row)?;
+        }
+        Ok(())
+    }
+}
+
+// helper macro for public instance value
+macro_rules! common {
+    ($field:ident) => {{
+        $field::ONE + $field::ONE
+    }};
+}
+
+fn keygen(
+    k: u32,
+) -> (
+    ParamsKZG<Bls12>,
+    ProvingKey<Fr, KZGCommitmentScheme<Bls12>>,
+) {
+    let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(k, ChaCha20Rng::from_entropy());
+    let empty_circuit: MyCircuit<Fr> = MyCircuit { inputs: vec![] };
+
+    //let mut rng = ChaCha20Rng::from_entropy();
+    //let circuit: MyCircuit<Fr> = MyCircuit {inputs: vec![
+    //    Value::known(Fr::random(&mut rng)),
+    //    Value::known(Fr::random(&mut rng)),
+    //    Value::known(Fr::random(&mut rng)),
+    //    Value::known(Fr::random(&mut rng)),
+    //] };
+    
+    let vk = keygen_vk_with_k(&params, &empty_circuit, k).expect("keygen_vk should not fail");
+    let pk = keygen_pk(vk, &empty_circuit).expect("keygen_pk should not fail");
+    (params, pk)
+}
+
+fn prover(
+    k: u32,
+    params: &ParamsKZG<Bls12>,
+    pk: &ProvingKey<Fr, KZGCommitmentScheme<Bls12>>,
+) -> Vec<u8> {
+    let mut rng = ChaCha20Rng::from_entropy();
+
+    // Generate multiple inputs
+    let num_inputs = 4;
+    let inputs: Vec<Value<Fr>> = (0..num_inputs)
+        .map(|_| Value::known(Fr::random(&mut rng)))
+        .collect();
+    let circuit = MyCircuit { inputs };
+
+    let mut transcript = CircuitTranscript::init();
+
+    // Prepare public instances (one per input)
+    let public_instances: Vec<Fr> = (0..num_inputs).map(|_| common!(Fr)).collect();
+
+    create_proof::<Fr, KZGCommitmentScheme<Bls12>, _, _>(
+        params,
+        pk,
+        &[circuit],
+        &[&[&public_instances[..]]],
+        rng,
+        &mut transcript,
+    )
+    .expect("proof generation should not fail");
+    transcript.finalize()
+}
+
+fn verifier(
+    params: &ParamsVerifierKZG<Bls12>,
+    vk: &VerifyingKey<Fr, KZGCommitmentScheme<Bls12>>,
+    proof: &[u8],
+) {
+    let num_inputs = 4;
+    let public_instances: Vec<Fr> = (0..num_inputs).map(|_| common!(Fr)).collect();
+    let mut transcript = CircuitTranscript::init_from_bytes(proof);
+    assert!(prepare::<Fr, KZGCommitmentScheme<Bls12>, _>(
+        vk,
+        &[&[&public_instances[..]]],
+        &mut transcript,
+    )
+    .unwrap()
+    .verify(params)
+    .is_ok());
+}
+
+#[test]
+fn plonk_t_new() {
+    let k_range = 20;
+
+    start_timer!(KEYGEN);
+    let (params, pk) = keygen(k_range);
+    end_timer!(KEYGEN, "KEYGEN");
+
+    start_timer!(PROVE);
+    let proof = prover(k_range, &params, &pk);
+    end_timer!(PROVE, "PROOF");
+
+    start_timer!(VERIFICATION);
+    verifier(&params.verifier_params(), &pk.get_vk(), &proof[..]);
+    end_timer!(VERIFICATION, "VERIFICATION");
 }

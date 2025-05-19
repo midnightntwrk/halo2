@@ -11,6 +11,8 @@ use crate::utils::rational::Rational;
 use halo2curves::fft::best_fft;
 use std::marker::PhantomData;
 
+use sppark::NTTInputOutputOrder;
+
 /// This structure contains precomputed constants and other details needed for
 /// performing operations on an evaluation domain of size $2^k$ and an extended
 /// domain of size $2^{k} * j$ with $j \neq 0$.
@@ -224,7 +226,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
         assert_eq!(a.values.len(), 1 << self.k);
 
         // Perform inverse FFT to obtain the polynomial in coefficient form
-        Self::ifft(&mut a.values, self.omega_inv, self.k, self.ifft_divisor);
+        crate::intt_gpu(0, &mut a.values, NTTInputOutputOrder::NN);
 
         Polynomial {
             values: a.values,
@@ -242,7 +244,7 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
 
         self.distribute_powers_zeta(&mut a.values, true);
         a.values.resize(self.extended_len(), F::ZERO);
-        best_fft(&mut a.values, self.extended_omega, self.extended_k);
+        crate::ntt_gpu(0, &mut a.values, NTTInputOutputOrder::NN);
 
         Polynomial {
             values: a.values,

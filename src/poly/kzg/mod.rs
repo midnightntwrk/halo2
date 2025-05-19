@@ -72,7 +72,8 @@ where
         let bases = &params.g;
         let size = scalars.len();
         assert!(bases.len() >= size);
-        msm_best(&scalars, &bases[0..size]).into()
+
+        Self::Commitment::from(crate::msm_gpu(&bases[0..size], &scalars))  
     }
 
     fn commit_lagrange(
@@ -84,7 +85,8 @@ where
         let bases = &params.g_lagrange;
         let size = scalars.len();
         assert!(bases.len() >= size);
-        msm_best(&scalars, &bases[0..size]).into()
+    
+        Self::Commitment::from(crate::msm_gpu(&bases[0..size], &scalars))  
     }
 
     fn multi_open<'com, T: Transcript>(

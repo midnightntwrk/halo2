@@ -48,6 +48,7 @@ rand_core = { version = "0.6", default-features = false }
 tracing = "0.1"
 blake2b_simd = "1" # MSRV 1.66.0
 sha3 = "0.9.1"
+rand = "0.8"
 rand_chacha = "0.3"
 serde = { version = "1", optional = true, features = ["derive"] }
 serde_derive = { version = "1", optional = true}
@@ -61,6 +62,16 @@ tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 halo2_legacy_pdqsort = { version = "0.1.0", optional = true }
 num-bigint = "0.4.6"
 
+blst = { version = "0.3.13", default-features = true }
+[dependencies.sppark]
+version = "^0.1.5"
+
+[build-dependencies.cc]
+version = "^1.2.19"
+
+[build-dependencies.which]
+version = "^4.4.2"
+
 [dev-dependencies]
 assert_matches = "1.5"
 criterion = "0.3"
@@ -72,7 +83,7 @@ serde_json = "1"
 getrandom = { version = "0.2", features = ["js"] }
 
 [features]
-default = ["bits"]
+default = ["bits", "nvcc_sm_80"]
 dev-graph = ["plotters", "tabbycat"]
 test-dev-graph = [
     "dev-graph",
@@ -88,6 +99,9 @@ circuit-params = []
 cost-estimator = ["serde", "serde_derive"]
 derive_serde = ["halo2curves/derive_serde"]
 truncated-challenges = [] # This feature truncates challenges to half the size of the scalar field.
+nvcc_sm_80 = []
+nvcc_sm_86 = []
+nvcc_sm_90 = []
 
 [lib]
 bench = false

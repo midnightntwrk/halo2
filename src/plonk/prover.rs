@@ -25,6 +25,8 @@ use crate::poly::batch_invert_rational;
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::rational::Rational;
+use crate::{start_timer, end_timer};
+use std::{thread, time::Duration};
 
 /// This creates a proof for the provided `circuit` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
@@ -271,6 +273,7 @@ where
             };
             instances.len()
         ];
+        
         let mut challenges = HashMap::<usize, F>::with_capacity(meta.num_challenges);
 
         let unusable_rows_start = domain.n as usize - (meta.blinding_factors() + 1);
@@ -290,7 +293,7 @@ where
 
             for ((circuit, advice), instances) in
                 circuits.iter().zip(advice.iter_mut()).zip(instances)
-            {
+            {   
                 let mut witness = WitnessCollection {
                     k: domain.k(),
                     current_phase,
@@ -328,7 +331,7 @@ where
                         })
                         .collect(),
                 );
-
+               
                 for (column_index, advice_values) in column_indices.iter().zip(&mut advice_values) {
                     if !witness.unblinded_advice.contains(column_index) {
                         for cell in &mut advice_values[unusable_rows_start..] {
@@ -341,7 +344,7 @@ where
                         }
                     }
                 }
-
+               
                 let advice_commitments: Vec<_> = advice_values
                     .iter()
                     .map(|poly| CS::commit_lagrange(params, poly))
@@ -374,6 +377,7 @@ where
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: F = transcript.squeeze_challenge();
 
+    
     let lookups: Vec<Vec<lookup::prover::Permuted<F>>> = instance
         .iter()
         .zip(advice.iter())
@@ -580,8 +584,9 @@ fn test_create_proof() {
         poly::kzg::{params::ParamsKZG, KZGCommitmentScheme},
         transcript::CircuitTranscript,
     };
-    use halo2curves::bn256::Bn256;
-    use halo2curves::bn256::Fr;
+    //use halo2curves::bn256::Bn256;
+    //use halo2curves::bn256::Fr;
+    use blstrs::{Bls12, Scalar as Fr};
     use rand_core::OsRng;
 
     #[derive(Clone, Copy)]
@@ -608,13 +613,13 @@ fn test_create_proof() {
         }
     }
 
-    let params: ParamsKZG<Bn256> = ParamsKZG::unsafe_setup(3, OsRng);
+    let params: ParamsKZG<Bls12> = ParamsKZG::unsafe_setup(3, OsRng);
     let vk = keygen_vk(&params, &MyCircuit).expect("keygen_vk should not fail");
     let pk = keygen_pk(vk, &MyCircuit).expect("keygen_pk should not fail");
     let mut transcript = CircuitTranscript::<_>::init();
 
     // Create proof with wrong number of instances
-    let proof = create_proof::<Fr, KZGCommitmentScheme<Bn256>, _, _>(
+    let proof = create_proof::<Fr, KZGCommitmentScheme<Bls12>, _, _>(
         &params,
         &pk,
         &[MyCircuit, MyCircuit],
@@ -625,7 +630,7 @@ fn test_create_proof() {
     assert!(matches!(proof.unwrap_err(), Error::InvalidInstances));
 
     // Create proof with correct number of instances
-    create_proof::<Fr, KZGCommitmentScheme<Bn256>, _, _>(
+    create_proof::<Fr, KZGCommitmentScheme<Bls12>, _, _>(
         &params,
         &pk,
         &[MyCircuit, MyCircuit],
