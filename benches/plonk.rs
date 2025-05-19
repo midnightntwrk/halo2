@@ -315,20 +315,20 @@ fn verifier(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let k_range = 16..=20;
-/*
+
     let mut g_key = c.benchmark_group("plonk-keygen"); g_key.sample_size(10);
     for k in k_range.clone() {
         g_key.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| b.iter(|| keygen(k)));
     }
     g_key.finish();
-*/
+
     let mut g_prove = c.benchmark_group("plonk-prover"); g_prove.sample_size(10);
     for k in k_range.clone() {
         let (p, pk) = keygen(k);
         g_prove.bench_with_input(BenchmarkId::from_parameter(k), &(k, &p, &pk), |b, &(k, p, pk)| b.iter(|| prover(k, p, pk)));
     }
     g_prove.finish();
-/*
+
     let mut g_ver = c.benchmark_group("plonk-verifier");
     for k in k_range {
         let (p, pk) = keygen(k);
@@ -336,7 +336,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         g_ver.bench_with_input(BenchmarkId::from_parameter(k), &(&p, pk.get_vk(), &proof[..]), |b, &(p, vk, proof)| b.iter(|| verifier(&p.verifier_params(), vk, proof)));
     }
     g_ver.finish();
-*/
+
 }
 
 criterion_group!(benches, criterion_benchmark);
