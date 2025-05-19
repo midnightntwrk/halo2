@@ -205,7 +205,7 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
             .personal(b"Halo2-Verify-Key")
             .to_state();
 
-        // We serialise the commitments of the VK to get the trascnript_repr.
+        // We serialise the commitments of the VK to get the `transcript_repr`.
         let mut buffer = Vec::new();
         buffer.push(VERSION);
         let k = &vk.domain.k();
@@ -218,6 +218,12 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
         for commitment in vk.permutation.commitments() {
             buffer.extend_from_slice(&commitment.to_raw_bytes())
         }
+
+        // We use the debug implementation to add the gates and domain to the hashed buffer.
+        // We should eventually move away from debug implementation for this purpose. See
+        // https://github.com/midnightntwrk/halo2/issues/5
+        buffer.extend_from_slice(format!("{:?}", vk.get_domain().pinned()).as_bytes());
+        buffer.extend_from_slice(format!("{:?}", vk.cs().pinned()).as_bytes());
 
         hasher.update(&buffer);
 

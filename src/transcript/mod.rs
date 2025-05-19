@@ -135,10 +135,10 @@ impl<H: TranscriptHash> Transcript for CircuitTranscript<H> {
     }
 
     fn check_empty(&mut self) -> io::Result<()> {
-        let mut buffer = Vec::new();
-        self.buffer.read_to_end(&mut buffer)?;
+        let mut trailing_byte = vec![0u8;0];
+        self.buffer.read_exact(&mut trailing_byte)?;
 
-        if buffer.is_empty() {
+        if trailing_byte.is_empty() {
             return Ok(());
         }
 

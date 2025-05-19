@@ -60,6 +60,7 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
         Self::Commitment: Hashable<T::Hash>;
 
     /// Verify an multi-opening proof for a given set of [VerifierQuery]'s.
+    /// The function fails if the transcript has trailing bytes.
     fn multi_prepare<'com, T: Transcript>(
         verifier_query: impl IntoIterator<Item = VerifierQuery<'com, F, Self>> + Clone,
         transcript: &mut T,

@@ -9,6 +9,8 @@ use crate::utils::arithmetic::compute_inner_product;
 
 /// Prepares a plonk proof into a PCS instance that can be finalized or batched. It is
 /// responsibility of the verifier to check the validity of the instance columns.
+///
+/// The verifier will error if there are trailing bytes in the transcript.
 pub fn prepare<F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
     vk: &VerifyingKey<F, CS>,
     instances: &[&[&[F]]],
