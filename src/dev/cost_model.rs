@@ -103,6 +103,7 @@ impl Lookup {
 struct Permutation {
     chunk_len: usize,
     columns: usize,
+    /// Number of usable rows. See [here](https://zcash.github.io/halo2/design/proving-system/permutation.html#zero-knowledge-adjustment)
     u: isize,
 }
 
@@ -183,9 +184,8 @@ impl CostOptions {
         // - SCALAR bytes per fixed per query <- missing
         // - SCALAR bytes per permutation column
         // - 5 * SCALAR bytes per lookup argument
-        let nb_perm_chunks = ((self.permutation.columns.saturating_sub(1))
-            / (self.max_degree.saturating_sub(2)))
-            + 1;
+        let nb_perm_chunks =
+            (self.permutation.columns.saturating_sub(1) / self.max_degree.saturating_sub(2)) + 1;
         let plonk = comp_bytes(1, 0) * self.advice.len()
             + self
                 .advice
