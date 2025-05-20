@@ -260,19 +260,22 @@ where
             .fold(E::Fr::ZERO, |acc_eval, ((points, evals), proof_eval)| {
                 let r_poly = lagrange_interpolate(points, evals);
                 let r_eval = eval_polynomial(&r_poly, x3);
-                let eval = points.iter().fold(*proof_eval - &r_eval, |eval, point| {
-                    eval * &(x3 - point).invert().unwrap()
-                });
+                // eval = (proof_eval - r_eval) / prod_i (x3 - point_i)
+                let den = points
+                    .iter()
+                    .fold(E::Fr::ONE, |acc, point| acc * &(x3 - point));
+                let eval = (*proof_eval - &r_eval) * den.invert().unwrap();
                 acc_eval * &(x2) + &eval
             });
 
         let x4: E::Fr = transcript.squeeze_challenge();
 
         let final_com = {
-            let mut polys = q_coms;
+            let mut coms = q_coms;
             let mut f_com_as_msm = MSMKZG::new();
+
             f_com_as_msm.append_term(E::Fr::ONE, f_com);
-            polys.push(f_com_as_msm);
+            coms.push(f_com_as_msm);
 
             #[cfg(feature = "truncated-challenges")]
             let powers = truncated_powers(x4);
@@ -280,7 +283,7 @@ where
             #[cfg(not(feature = "truncated-challenges"))]
             let powers = powers(x4);
 
-            msm_inner_product(&polys, powers)
+            msm_inner_product(&coms, powers)
         };
 
         let v = {
