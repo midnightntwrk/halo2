@@ -95,6 +95,7 @@ where
                         transcript.common(value)?;
                         *poly = *value;
                     }
+                    transcript.common(&F::from_u128(values.len() as u128))?;
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -514,7 +515,7 @@ where
         transcript.write(eval)?;
     }
 
-    let vanishing = vanishing.evaluate(x, transcript)?;
+    let vanishing = vanishing.evaluate(x, domain, transcript)?;
 
     // Evaluate common permutation data
     pk.permutation.evaluate(x, transcript)?;

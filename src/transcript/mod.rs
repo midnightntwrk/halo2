@@ -68,8 +68,13 @@ pub trait Transcript {
     /// Write a hashable element `T` to the proof and the transcript.
     fn write<T: Hashable<Self::Hash>>(&mut self, input: &T) -> io::Result<()>;
 
-    /// Returns the buffer with the proof
+    /// Returns the buffer with the proof.
     fn finalize(self) -> Vec<u8>;
+
+    /// Checks that the transcript is empty.
+    /// This is used to make sure a transcript does not contain trailing bytes at the end of
+    /// a proof verification.
+    fn assert_empty(&mut self) -> io::Result<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +134,17 @@ impl<H: TranscriptHash> Transcript for CircuitTranscript<H> {
 
     fn finalize(self) -> Vec<u8> {
         self.buffer.into_inner()
+    }
+
+    fn assert_empty(&mut self) -> io::Result<()> {
+        if self.buffer.get_ref().len() == self.buffer.position() as usize {
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Transcript has unexpected trailing bytes.",
+        ))
     }
 }
 

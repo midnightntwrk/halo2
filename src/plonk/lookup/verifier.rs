@@ -183,31 +183,31 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Evaluated<
             // Open lookup product commitment at x
             .chain(Some(VerifierQuery::new(
                 x,
-                self.committed.product_commitment,
+                &self.committed.product_commitment,
                 self.product_eval,
             )))
             // Open lookup input commitments at x
             .chain(Some(VerifierQuery::new(
                 x,
-                self.committed.permuted.permuted_input_commitment,
+                &self.committed.permuted.permuted_input_commitment,
                 self.permuted_input_eval,
             )))
             // Open lookup table commitments at x
             .chain(Some(VerifierQuery::new(
                 x,
-                self.committed.permuted.permuted_table_commitment,
+                &self.committed.permuted.permuted_table_commitment,
                 self.permuted_table_eval,
             )))
             // Open lookup input commitments at \omega^{-1} x
             .chain(Some(VerifierQuery::new(
                 x_inv,
-                self.committed.permuted.permuted_input_commitment,
+                &self.committed.permuted.permuted_input_commitment,
                 self.permuted_input_inv_eval,
             )))
             // Open lookup product commitment at \omega x
             .chain(Some(VerifierQuery::new(
                 x_next,
-                self.committed.product_commitment,
+                &self.committed.product_commitment,
                 self.product_next_eval,
             )))
     }

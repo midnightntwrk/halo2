@@ -23,50 +23,47 @@ use super::{CellValue, Region};
 
 /// Options to build a circuit specification to measure the cost model of.
 #[derive(Debug)]
-pub struct CostOptions {
+struct CostOptions {
     /// An advice column with the given rotations. May be repeated.
-    pub advice: Vec<Poly>,
+    advice: Vec<Poly>,
 
     /// An instance column with the given rotations. May be repeated.
-    pub instance: Vec<Poly>,
+    instance: Vec<Poly>,
 
     /// A fixed column with the given rotations. May be repeated.
-    pub fixed: Vec<Poly>,
-
-    /// Maximum degree of the custom gates.
-    pub gate_degree: usize,
+    fixed: Vec<Poly>,
 
     /// Maximum degree of the constraint system.
-    pub max_degree: usize,
+    max_degree: usize,
 
     /// A lookup over N columns with max input degree I and max table degree T. May be repeated.
-    pub lookup: Vec<Lookup>,
+    lookup: Vec<Lookup>,
 
     /// A permutation over N columns. May be repeated.
-    pub permutation: Permutation,
+    permutation: Permutation,
 
     /// 2^K bound on the number of rows, accounting for ZK, PIs and Lookup tables.
-    pub min_k: usize,
+    min_k: usize,
 
     /// Rows count, not including table rows and not accounting for compression
     /// (where multiple regions can use the same rows).
-    pub rows_count: usize,
+    rows_count: usize,
 
     /// Table rows count, not accounting for compression (where multiple regions
     /// can use the same rows), but not much if any compression can happen with
     /// table rows anyway.
-    pub table_rows_count: usize,
+    table_rows_count: usize,
 
     /// Compressed rows count, accounting for compression (where multiple
     /// regions can use the same rows).
-    pub compressed_rows_count: usize,
+    compressed_rows_count: usize,
 }
 
 /// Structure holding polynomial related data for benchmarks
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Poly {
+struct Poly {
     /// Rotations for the given polynomial
-    pub rotations: Vec<isize>,
+    rotations: Vec<isize>,
 }
 
 impl FromStr for Poly {
@@ -82,16 +79,16 @@ impl FromStr for Poly {
 
 /// Structure holding the Lookup related data for circuit benchmarks.
 #[derive(Debug, Clone)]
-pub struct Lookup;
+struct Lookup;
 
 impl Lookup {
     /// Returns the queries of the lookup argument
-    pub fn queries(&self) -> impl Iterator<Item = Poly> {
+    fn queries(&self) -> impl Iterator<Item = Poly> {
         // - product commitments at x and \omega x
         // - input commitments at x and x_inv
         // - table commitments at x
         let product = "0,1".parse().unwrap();
-        let input = "0,-1".parse().unwrap();
+        let input = "-1,0".parse().unwrap();
         let table = "0".parse().unwrap();
 
         iter::empty()
@@ -103,26 +100,26 @@ impl Lookup {
 
 /// Number of permutation enabled columns
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Permutation {
+struct Permutation {
+    chunk_len: usize,
     columns: usize,
+    /// Number of usable rows. See [here](https://zcash.github.io/halo2/design/proving-system/permutation.html#zero-knowledge-adjustment)
+    u: isize,
 }
 
 impl Permutation {
     /// Returns the queries of the Permutation argument
-    pub fn queries(&self) -> impl Iterator<Item = Poly> {
-        // - product commitments at x and x_inv
-        // - polynomial commitments at x
-        let product = "0,-1".parse().unwrap();
-        let poly = "0".parse().unwrap();
+    fn queries(&self) -> impl Iterator<Item = Poly> {
+        // - at wX, X, uwX for all (except the last)
+        // - at wX, X for the last
+        let mut chunks: Poly = "0,1".parse().unwrap();
+        chunks.rotations.push(self.u);
+
+        let last_chunk: Poly = "0,1".parse().unwrap();
 
         iter::empty()
-            .chain(Some(product))
-            .chain(iter::repeat(poly).take(self.columns))
-    }
-
-    /// Returns the number of columns of the Permutation argument
-    pub fn nr_columns(&self) -> usize {
-        self.columns
+            .chain(iter::repeat(chunks).take((self.columns - 1) / self.chunk_len))
+            .chain(Some(last_chunk))
     }
 }
 
@@ -139,9 +136,12 @@ pub struct CircuitModel {
     pub max_deg: usize,
     /// Number of advice columns.
     pub advice_columns: usize,
-    /// Number of lookup arguments.
+    /// Number of fixed columns. This includes selectors, tables (for lookups), and permutation
+    /// commitments.
+    pub fixed_columns: usize,
+    /// Number of advice columns used in the lookup argument.
     pub lookups: usize,
-    /// Equality constraint enabled columns.
+    /// Equality constraint enabled columns (fixed columns are counted in `fixed_columns` value).
     pub permutations: usize,
     /// Number of distinct column queries across all gates.
     pub column_queries: usize,
@@ -149,12 +149,15 @@ pub struct CircuitModel {
     pub point_sets: usize,
     /// Size of the proof for the circuit
     pub size: usize,
+    /// Compressed rows count, accounting for compression (where multiple
+    /// regions can use the same rows).
+    pub compressed_rows_count: usize,
 }
 
 impl CostOptions {
     /// Convert [CostOptions] to [CircuitModel]. The proof sizè is computed depending on the base
     /// and scalar field size of the curve used, together with the [CommitmentScheme].
-    pub fn into_circuit_model<const COMM: usize, const SCALAR: usize>(&self) -> CircuitModel {
+    fn into_circuit_model<const COMM: usize, const SCALAR: usize>(self) -> CircuitModel {
         let mut queries: Vec<_> = iter::empty()
             .chain(self.advice.iter())
             .chain(self.instance.iter())
@@ -174,24 +177,41 @@ impl CostOptions {
 
         // PLONK:
         // - COMM bytes (commitment) per advice column
-        // - 3 * COMM bytes (commitments) + 5 * SCALAR bytes (evals) per lookup column
-        // - COMM bytes (commitment) + 2 * SCALAR bytes (evals) per permutation argument
-        // - COMM bytes (eval) per column per permutation argument
+        // - 3 * COMM bytes per lookup
+        // - COMM bytes per ((self.permutation.columns - 1) / (self.max_degree - 2)) + 1
+        // - 3 * SCALAR bytes per ((self.permutation.columns - 1) / (self.max_degree - 2)) + 1
+        // - SCALAR bytes per advice per query
+        // - SCALAR bytes per fixed per query <- missing
+        // - SCALAR bytes per permutation column
+        // - 5 * SCALAR bytes per lookup argument
+        let nb_perm_chunks =
+            (self.permutation.columns.saturating_sub(1) / self.max_degree.saturating_sub(2)) + 1;
         let plonk = comp_bytes(1, 0) * self.advice.len()
+            + self
+                .advice
+                .iter()
+                .map(|polys| comp_bytes(0, polys.rotations.len()))
+                .sum::<usize>()
+            + self
+                .fixed
+                .iter()
+                .map(|polys| comp_bytes(0, polys.rotations.len()))
+                .sum::<usize>()
             + comp_bytes(3, 5) * self.lookup.len()
-            + comp_bytes(1, 2 + self.permutation.columns);
+            + (comp_bytes(1, 3) * nb_perm_chunks).saturating_sub(comp_bytes(0, 1)) // we don't need the permutation_product_last_eval of the last chunk
+            + comp_bytes(0, 1) * self.permutation.columns;
 
         // Vanishing argument:
-        // - (max_deg - 1) * COMM bytes (commitments) + (max_deg - 1) * SCALAR bytes (h_evals)
-        //   for quotient polynomial
-        // - SCALAR bytes (eval) per column query
-        let vanishing =
-            comp_bytes(self.max_degree - 1, self.max_degree - 1) + comp_bytes(0, column_queries);
+        // - COMM bytes for random poly
+        // - (max_deg - 1) COMM bytes for the pieces
+        // - SCALAR bytes for random piece eval
+        let vanishing = comp_bytes(self.max_degree, 1);
 
         // Multiopening argument:
-        // - f_commitment (COMM bytes)
-        // - SCALAR bytes (evals) per set of points in multiopen argument
-        let multiopen = comp_bytes(1, point_sets);
+        // - COMM bytes for f_commitment
+        // - SCALAR bytes per set of points in multiopen argument
+        // - COMM bytes for proof
+        let multiopen = comp_bytes(2, point_sets);
 
         let mut nr_rotations = HashSet::new();
         for poly in self.advice.iter() {
@@ -204,11 +224,7 @@ impl CostOptions {
             nr_rotations.extend(poly.rotations.clone());
         }
 
-        // Polycommit GWC:
-        // - number_rotations * COMM bytes
-        let polycomm = comp_bytes(nr_rotations.len(), 0);
-
-        let size = plonk + vanishing + multiopen + polycomm;
+        let size = plonk + vanishing + multiopen;
 
         CircuitModel {
             k: self.min_k,
@@ -216,11 +232,14 @@ impl CostOptions {
             table_rows: self.table_rows_count,
             max_deg: self.max_degree,
             advice_columns: self.advice.len(),
+            // Note that we have one fixed commitment per column in the permutation argument
+            fixed_columns: self.fixed.len() + self.permutation.columns,
             lookups: self.lookup.len(),
             permutations: self.permutation.columns,
             column_queries,
             point_sets,
             size,
+            compressed_rows_count: self.compressed_rows_count,
         }
     }
 }
@@ -242,7 +261,7 @@ pub fn from_circuit_to_circuit_model<
 
 /// Given a circuit, this function returns [CostOptions]. If no upper bound for `k` is
 /// provided, we iterate until a valid `k` is found (this might delay the computation).
-pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
+fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>, C: Circuit<F>>(
     k_upper_bound: Option<u32>,
     circuit: &C,
     nb_instances: usize,
@@ -266,10 +285,11 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
     };
 
     let advice = {
-        // init the advice polynomials with no rotations
+        // init the advice polynomials with at least X as a rotation (always opens at least once)
         let mut advice = vec![Poly { rotations: vec![] }; cs.num_advice_columns()];
         for (col, rot) in cs.advice_queries() {
             advice[col.index()].rotations.push(rot.0 as isize);
+            advice[col.index()].rotations.sort()
         }
         advice
     };
@@ -279,6 +299,7 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         let mut instance = vec![Poly { rotations: vec![] }; cs.num_instance_columns()];
         for (col, rot) in cs.instance_queries() {
             instance[col.index()].rotations.push(rot.0 as isize);
+            instance[col.index()].rotations.sort()
         }
         instance
     };
@@ -286,15 +307,10 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
     let lookup = { cs.lookups().iter().map(|_| Lookup).collect::<Vec<_>>() };
 
     let permutation = Permutation {
+        chunk_len: cs.degree() - 2,
         columns: cs.permutation().get_columns().len(),
+        u: -((cs.blinding_factors() + 1) as isize),
     };
-
-    let gate_degree = cs
-        .gates
-        .iter()
-        .flat_map(|gate| gate.polynomials().iter().map(|poly| poly.degree()))
-        .max()
-        .unwrap_or(0);
 
     // Note that this computation does't assume that `regions` is already in
     // order of increasing row indices.
@@ -340,7 +356,6 @@ pub fn from_circuit_to_cost_model_options<F: Ord + Field + FromUniformBytes<64>,
         advice,
         instance,
         fixed,
-        gate_degree,
         max_degree: cs.degree(),
         lookup,
         permutation,
@@ -690,5 +705,198 @@ impl<F: Field> Assignment<F> for DevAssembly<F> {
 
     fn pop_namespace(&mut self, _: Option<String>) {
         // Do nothing; we don't care about namespaces in this context.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::{Layouter, SimpleFloorPlanner};
+    use crate::plonk::{create_proof, keygen_pk, keygen_vk_with_k};
+    use crate::plonk::{Expression, Fixed, TableColumn};
+    use crate::poly::kzg::params::ParamsKZG;
+    use crate::poly::kzg::KZGCommitmentScheme;
+    use crate::poly::Rotation;
+    use crate::transcript::{CircuitTranscript, Transcript};
+    use blake2b_simd::State;
+    use blstrs::{Bls12, Scalar};
+    use rand_core::{OsRng, RngCore};
+
+    #[derive(Clone, Copy)]
+    struct StandardPlonkConfig {
+        a: Column<Advice>,
+        b: Column<Advice>,
+        c: Column<Advice>,
+        q_a: Column<Fixed>,
+        q_b: Column<Fixed>,
+        q_c: Column<Fixed>,
+        q_ab: Column<Fixed>,
+        constant: Column<Fixed>,
+        #[allow(dead_code)]
+        instance: Column<Instance>,
+        table_selector: Selector,
+        table: TableColumn,
+    }
+
+    impl StandardPlonkConfig {
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self {
+            let [a, b, c] = std::array::from_fn(|_| meta.advice_column());
+            let [q_a, q_b, q_c, q_ab, constant] = std::array::from_fn(|_| meta.fixed_column());
+            let instance = meta.instance_column();
+
+            [a, b, c].map(|column| meta.enable_equality(column));
+
+            let table_selector = meta.complex_selector();
+            let sl = meta.lookup_table_column();
+
+            meta.lookup("lookup", |meta| {
+                let selector = meta.query_selector(table_selector);
+                let not_selector = Expression::Constant(Scalar::ONE) - selector.clone();
+                let advice = meta.query_advice(a, Rotation::cur());
+                vec![(selector * advice + not_selector, sl)]
+            });
+
+            meta.create_gate(
+                "q_a·a + q_b·b + q_c·c + q_ab·a·b + constant + instance = 0",
+                |meta| {
+                    let [a, b, c] =
+                        [a, b, c].map(|column| meta.query_advice(column, Rotation::cur()));
+                    let [q_a, q_b, q_c, q_ab, constant] = [q_a, q_b, q_c, q_ab, constant]
+                        .map(|column| meta.query_fixed(column, Rotation::cur()));
+                    let instance = meta.query_instance(instance, Rotation::cur());
+                    Some(
+                        q_a * a.clone()
+                            + q_b * b.clone()
+                            + q_c * c
+                            + q_ab * a * b
+                            + constant
+                            + instance,
+                    )
+                },
+            );
+
+            StandardPlonkConfig {
+                a,
+                b,
+                c,
+                q_a,
+                q_b,
+                q_c,
+                q_ab,
+                constant,
+                instance,
+                table_selector,
+                table: sl,
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct StandardPlonk(Scalar);
+
+    impl Circuit<Scalar> for StandardPlonk {
+        type Config = StandardPlonkConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            StandardPlonkConfig::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), Error> {
+            layouter.assign_table(
+                || "8-bit table",
+                |mut table| {
+                    for row in 0u64..(1 << 8) {
+                        table.assign_cell(
+                            || format!("row {row}"),
+                            config.table,
+                            row as usize,
+                            || Value::known(Scalar::from(row + 1)),
+                        )?;
+                    }
+
+                    Ok(())
+                },
+            )?;
+
+            layouter.assign_region(
+                || "",
+                |mut region| {
+                    config.table_selector.enable(&mut region, 0)?;
+                    region.assign_advice(|| "", config.a, 0, || Value::known(self.0))?;
+                    region.assign_fixed(|| "", config.q_a, 0, || Value::known(-Scalar::ONE))?;
+
+                    region.assign_advice(
+                        || "",
+                        config.a,
+                        1,
+                        || Value::known(-Scalar::from(5u64)),
+                    )?;
+                    for (idx, column) in (1..).zip([
+                        config.q_a,
+                        config.q_b,
+                        config.q_c,
+                        config.q_ab,
+                        config.constant,
+                    ]) {
+                        region.assign_fixed(
+                            || "",
+                            column,
+                            1,
+                            || Value::known(Scalar::from(idx as u64)),
+                        )?;
+                    }
+
+                    let a =
+                        region.assign_advice(|| "", config.a, 2, || Value::known(Scalar::ONE))?;
+                    a.copy_advice(|| "", &mut region, config.b, 3)?;
+                    a.copy_advice(|| "", &mut region, config.c, 4)?;
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn cost_model() {
+        let k = 9;
+        let mut random_byte = [0u8; 1];
+        OsRng::fill_bytes(&mut OsRng, &mut random_byte);
+        let circuit = StandardPlonk(Scalar::from(random_byte[0] as u64));
+
+        let params = ParamsKZG::<Bls12>::unsafe_setup(k, OsRng);
+        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit, k)
+            .expect("vk should not fail");
+        let pk = keygen_pk(vk, &circuit).expect("pk should not fail");
+
+        let instances: &[&[Scalar]] = &[&[circuit.0]];
+        let mut transcript = CircuitTranscript::<State>::init();
+
+        create_proof::<Scalar, KZGCommitmentScheme<Bls12>, _, _>(
+            &params,
+            &pk,
+            &[circuit.clone()],
+            &[instances],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("proof generation should not fail");
+
+        let circuit_model =
+            from_circuit_to_circuit_model::<_, _, 48, 32>(Some(k), &circuit, instances[0].len());
+
+        let proof = transcript.finalize();
+
+        assert_eq!(circuit_model.size, proof.len());
     }
 }
