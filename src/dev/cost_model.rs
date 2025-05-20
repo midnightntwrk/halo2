@@ -732,6 +732,7 @@ mod tests {
         q_c: Column<Fixed>,
         q_ab: Column<Fixed>,
         constant: Column<Fixed>,
+        #[allow(dead_code)]
         instance: Column<Instance>,
         table_selector: Selector,
         table: TableColumn,
