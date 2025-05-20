@@ -5,6 +5,7 @@ use ff::PrimeField;
 use group::{Curve, GroupEncoding};
 use halo2curves::serde::SerdeObject;
 use std::io;
+use std::io::{Read, Write};
 
 /// This enum specifies how various types are serialized and deserialized.
 #[derive(Clone, Copy, Debug)]
@@ -23,7 +24,7 @@ pub enum SerdeFormat {
 }
 
 /// Interface for Serde objects that can be represented in compressed form.
-pub trait ProcessedSerdeObject: SerdeObject + Default {
+pub trait ProcessedSerdeObject: GroupEncoding {
     /// Reads an element from the buffer and parses it according to the `format`:
     /// - `Processed`: Reads a compressed element and decompress it
     /// - `RawBytes`: Reads an uncompressed element and checks its correctness
@@ -37,10 +38,10 @@ pub trait ProcessedSerdeObject: SerdeObject + Default {
 }
 
 /// Byte length of an affine curve element according to `format`.
-pub fn byte_length<T: ProcessedSerdeObject + Default>(format: SerdeFormat) -> usize {
+pub fn byte_length<T: ProcessedSerdeObject>(format: SerdeFormat) -> usize {
     match format {
-        SerdeFormat::Processed => T::default().to_raw_bytes().len(),
-        _ => T::default().to_raw_bytes().len() * 2,
+        SerdeFormat::Processed => <T as GroupEncoding>::Repr::default().as_ref().len(),
+        _ => <T as GroupEncoding>::Repr::default().as_ref().len() * 2,
     }
 }
 
@@ -58,33 +59,44 @@ pub(crate) fn read_f<F: PrimeField + SerdeObject, R: io::Read>(
 }
 
 /// Trait for serialising SerdeObjects
-impl<C: Curve + SerdeObject + Default + GroupEncoding> ProcessedSerdeObject for C {
+impl<C> ProcessedSerdeObject for C
+where
+    C: Curve + Default + GroupEncoding + From<C::AffineRepr>,
+    C::AffineRepr: SerdeObject,
+{
     /// Reads an element from the buffer and parses it according to the `format`:
     /// - `Processed`: Reads a compressed curve element and decompress it
     /// - `RawBytes`: Reads an uncompressed curve element with coordinates in Montgomery form.
     ///   Checks that field elements are less than modulus, and then checks that the point is on the curve.
     /// - `RawBytesUnchecked`: Reads an uncompressed curve element with coordinates in Montgomery form;
     ///   does not perform any checks
-    fn read<R: io::Read>(reader: &mut R, format: SerdeFormat) -> io::Result<Self> {
-        match format {
-            SerdeFormat::Processed => {
-                let mut compressed = <Self as GroupEncoding>::Repr::default();
-                reader.read_exact(compressed.as_mut())?;
-                Option::from(Self::from_bytes(&compressed)).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, "Invalid point encoding in proof")
-                })
+    fn read<R: Read>(reader: &mut R, format: SerdeFormat) -> io::Result<Self> {
+        {
+            match format {
+                SerdeFormat::Processed => {
+                    let mut compressed = <Self as GroupEncoding>::Repr::default();
+                    reader.read_exact(compressed.as_mut())?;
+                    Option::from(Self::from_bytes(&compressed)).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::Other, "Invalid point encoding in proof")
+                    })
+                }
+                SerdeFormat::RawBytes => {
+                    <Self as Curve>::AffineRepr::read_raw(reader).map(|p| p.into())
+                }
+                SerdeFormat::RawBytesUnchecked => {
+                    Ok(<Self as Curve>::AffineRepr::read_raw_unchecked(reader).into())
+                }
             }
-            SerdeFormat::RawBytes => <Self as SerdeObject>::read_raw(reader),
-            SerdeFormat::RawBytesUnchecked => Ok(<Self as SerdeObject>::read_raw_unchecked(reader)),
         }
     }
+
     /// Writes a curve element according to `format`:
     /// - `Processed`: Writes a compressed curve element
     /// - Otherwise: Writes an uncompressed curve element with coordinates in Montgomery form
-    fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()> {
+    fn write<W: Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()> {
         match format {
             SerdeFormat::Processed => writer.write_all(self.to_bytes().as_ref()),
-            _ => self.write_raw(writer),
+            _ => self.to_affine().write_raw(writer),
         }
     }
 }

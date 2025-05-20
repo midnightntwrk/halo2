@@ -213,12 +213,16 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> VerifyingK
         buffer.push(*k as u8);
         buffer.extend_from_slice(&(vk.fixed_commitments.len() as u32).to_le_bytes());
         for commitment in &vk.fixed_commitments {
-            buffer.extend_from_slice(&commitment.to_raw_bytes())
+            commitment
+                .write(&mut buffer, SerdeFormat::RawBytesUnchecked)
+                .expect("Failed to write to buffer - this is a bug.");
         }
 
         buffer.extend_from_slice(&(vk.permutation.commitments().len() as u32).to_le_bytes());
         for commitment in vk.permutation.commitments() {
-            buffer.extend_from_slice(&commitment.to_raw_bytes())
+            commitment
+                .write(&mut buffer, SerdeFormat::RawBytesUnchecked)
+                .expect("Failed to write to buffer - this is a bug.");
         }
 
         // We use the debug implementation to add the gates and domain to the hashed buffer.
