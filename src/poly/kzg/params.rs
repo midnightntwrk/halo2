@@ -2,23 +2,22 @@ use crate::utils::arithmetic::{g_to_lagrange, parallelize};
 use crate::utils::SerdeFormat;
 
 use ff::{Field, PrimeField};
-use group::{prime::PrimeCurveAffine, Curve, Group};
+use group::{Curve, Group};
 use halo2curves::pairing::Engine;
 use rand_core::RngCore;
 use std::fmt::Debug;
 
 use crate::poly::commitment::Params;
 use crate::utils::helpers::ProcessedSerdeObject;
-use halo2curves::CurveAffine;
 use std::io;
 
 /// These are the public parameters for the polynomial commitment scheme.
 #[derive(Debug, Clone)]
 pub struct ParamsKZG<E: Engine> {
-    pub(crate) g: Vec<E::G1Affine>,
-    pub(crate) g_lagrange: Vec<E::G1Affine>,
-    pub(crate) g2: E::G2Affine,
-    pub(crate) s_g2: E::G2Affine,
+    pub(crate) g: Vec<E::G1>,
+    pub(crate) g_lagrange: Vec<E::G1>,
+    pub(crate) g2: E::G2,
+    pub(crate) s_g2: E::G2,
 }
 
 impl<E: Engine> Params for ParamsKZG<E> {
@@ -43,7 +42,7 @@ impl<E: Engine + Debug> ParamsKZG<E> {
         let n = 1 << new_k;
         assert!(n < self.g_lagrange.len() as u32);
         self.g.truncate(n as usize);
-        self.g_lagrange = g_to_lagrange(self.g.iter().map(|g| g.to_curve()).collect(), new_k);
+        self.g_lagrange = g_to_lagrange(&self.g, new_k);
     }
 
     /// Initializes parameters for the curve, draws toxic secret from given rng.
@@ -55,12 +54,12 @@ impl<E: Engine + Debug> ParamsKZG<E> {
         let n: u64 = 1 << k;
 
         // Calculate g = [G1, [s] G1, [s^2] G1, ..., [s^(n-1)] G1] in parallel.
-        let g1 = E::G1Affine::generator();
+        let g1 = E::G1::generator();
         let s = <E::Fr>::random(rng);
 
-        let mut g_projective = vec![E::G1::identity(); n as usize];
-        parallelize(&mut g_projective, |g, start| {
-            let mut current_g: E::G1 = g1.into();
+        let mut g = vec![E::G1::identity(); n as usize];
+        parallelize(&mut g, |g, start| {
+            let mut current_g: E::G1 = g1;
             current_g *= s.pow_vartime([start as u64]);
             for g in g.iter_mut() {
                 *g = current_g;
@@ -68,15 +67,7 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             }
         });
 
-        let g = {
-            let mut g = vec![E::G1Affine::identity(); n as usize];
-            parallelize(&mut g, |g, starts| {
-                E::G1::batch_normalize(&g_projective[starts..(starts + g.len())], g);
-            });
-            g
-        };
-
-        let mut g_lagrange_projective = vec![E::G1::identity(); n as usize];
+        let mut g_lagrange = vec![E::G1::identity(); n as usize];
         let mut root = E::Fr::ROOT_OF_UNITY;
         for _ in k..E::Fr::S {
             root = root.square();
@@ -85,7 +76,7 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             .invert()
             .expect("inversion should be ok for n = 1<<k");
         let multiplier = (s.pow_vartime([n]) - E::Fr::ONE) * n_inv;
-        parallelize(&mut g_lagrange_projective, |g, start| {
+        parallelize(&mut g_lagrange, |g, start| {
             for (idx, g) in g.iter_mut().enumerate() {
                 let offset = start + idx;
                 let root_pow = root.pow_vartime([offset as u64]);
@@ -94,18 +85,8 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             }
         });
 
-        let g_lagrange = {
-            let mut g_lagrange = vec![E::G1Affine::identity(); n as usize];
-            parallelize(&mut g_lagrange, |g_lagrange, start| {
-                let end = start + g_lagrange.len();
-                E::G1::batch_normalize(&g_lagrange_projective[start..end], g_lagrange);
-            });
-            drop(g_lagrange_projective);
-            g_lagrange
-        };
-
-        let g2 = <E::G2Affine as PrimeCurveAffine>::generator();
-        let s_g2 = (g2 * s).into();
+        let g2 = E::G2::generator();
+        let s_g2 = g2 * s;
 
         Self {
             g,
@@ -120,15 +101,15 @@ impl<E: Engine + Debug> ParamsKZG<E> {
     pub fn from_parts(
         &self,
         k: u32,
-        g: Vec<E::G1Affine>,
-        g_lagrange: Option<Vec<E::G1Affine>>,
-        g2: E::G2Affine,
-        s_g2: E::G2Affine,
+        g: Vec<E::G1>,
+        g_lagrange: Option<Vec<E::G1>>,
+        g2: E::G2,
+        s_g2: E::G2,
     ) -> Self {
         Self {
             g_lagrange: match g_lagrange {
                 Some(g_l) => g_l,
-                None => g_to_lagrange(g.iter().map(PrimeCurveAffine::to_curve).collect(), k),
+                None => g_to_lagrange(&g, k),
             },
             g,
             g2,
@@ -137,20 +118,20 @@ impl<E: Engine + Debug> ParamsKZG<E> {
     }
 
     /// Returns gernerator on G2
-    pub fn g2(&self) -> E::G2Affine {
+    pub fn g2(&self) -> E::G2 {
         self.g2
     }
 
     /// Returns first power of secret on G2
-    pub fn s_g2(&self) -> E::G2Affine {
+    pub fn s_g2(&self) -> E::G2 {
         self.s_g2
     }
 
     /// Writes parameters to buffer
     pub fn write_custom<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()>
     where
-        E::G1Affine: CurveAffine + ProcessedSerdeObject,
-        E::G2Affine: CurveAffine + ProcessedSerdeObject,
+        E::G1: Curve + ProcessedSerdeObject,
+        E::G2: Curve + ProcessedSerdeObject,
     {
         writer.write_all(&self.g.len().ilog2().to_le_bytes())?;
         for el in self.g.iter() {
@@ -167,8 +148,8 @@ impl<E: Engine + Debug> ParamsKZG<E> {
     /// Reads params from a buffer.
     pub fn read_custom<R: io::Read>(reader: &mut R, format: SerdeFormat) -> io::Result<Self>
     where
-        E::G1Affine: CurveAffine + ProcessedSerdeObject,
-        E::G2Affine: CurveAffine + ProcessedSerdeObject,
+        E::G1: Curve + ProcessedSerdeObject,
+        E::G2: Curve + ProcessedSerdeObject,
     {
         let mut k = [0u8; 4];
         reader.read_exact(&mut k[..])?;
@@ -179,26 +160,25 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             SerdeFormat::Processed => {
                 use group::GroupEncoding;
                 let load_points_from_file_parallelly =
-                    |reader: &mut R| -> io::Result<Vec<Option<E::G1Affine>>> {
+                    |reader: &mut R| -> io::Result<Vec<Option<E::G1>>> {
                         let mut points_compressed =
-                            vec![<<E as Engine>::G1Affine as GroupEncoding>::Repr::default(); n];
+                            vec![<<E as Engine>::G1 as GroupEncoding>::Repr::default(); n];
                         for points_compressed in points_compressed.iter_mut() {
                             reader.read_exact((*points_compressed).as_mut())?;
                         }
 
-                        let mut points = vec![Option::<E::G1Affine>::None; n];
+                        let mut points = vec![Option::<E::G1>::None; n];
                         parallelize(&mut points, |points, chunks| {
                             for (i, point) in points.iter_mut().enumerate() {
-                                *point = Option::from(E::G1Affine::from_bytes(
-                                    &points_compressed[chunks + i],
-                                ));
+                                *point =
+                                    Option::from(E::G1::from_bytes(&points_compressed[chunks + i]));
                             }
                         });
                         Ok(points)
                     };
 
                 let g = load_points_from_file_parallelly(reader)?;
-                let g: Vec<<E as Engine>::G1Affine> = g
+                let g: Vec<<E as Engine>::G1> = g
                     .iter()
                     .map(|point| {
                         point.ok_or_else(|| {
@@ -207,7 +187,7 @@ impl<E: Engine + Debug> ParamsKZG<E> {
                     })
                     .collect::<Result<_, _>>()?;
                 let g_lagrange = load_points_from_file_parallelly(reader)?;
-                let g_lagrange: Vec<<E as Engine>::G1Affine> = g_lagrange
+                let g_lagrange: Vec<<E as Engine>::G1> = g_lagrange
                     .iter()
                     .map(|point| {
                         point.ok_or_else(|| {
@@ -219,27 +199,27 @@ impl<E: Engine + Debug> ParamsKZG<E> {
             }
             SerdeFormat::RawBytes => {
                 let g = (0..n)
-                    .map(|_| <E::G1Affine as ProcessedSerdeObject>::read(reader, format))
+                    .map(|_| <E::G1 as ProcessedSerdeObject>::read(reader, format))
                     .collect::<Result<Vec<_>, _>>()?;
                 let g_lagrange = (0..n)
-                    .map(|_| <E::G1Affine as ProcessedSerdeObject>::read(reader, format))
+                    .map(|_| <E::G1 as ProcessedSerdeObject>::read(reader, format))
                     .collect::<Result<Vec<_>, _>>()?;
                 (g, g_lagrange)
             }
             SerdeFormat::RawBytesUnchecked => {
                 // avoid try branching for performance
                 let g = (0..n)
-                    .map(|_| <E::G1Affine as ProcessedSerdeObject>::read(reader, format).unwrap())
+                    .map(|_| <E::G1 as ProcessedSerdeObject>::read(reader, format).unwrap())
                     .collect::<Vec<_>>();
                 let g_lagrange = (0..n)
-                    .map(|_| <E::G1Affine as ProcessedSerdeObject>::read(reader, format).unwrap())
+                    .map(|_| <E::G1 as ProcessedSerdeObject>::read(reader, format).unwrap())
                     .collect::<Vec<_>>();
                 (g, g_lagrange)
             }
         };
 
-        let g2 = E::G2Affine::read(reader, format)?;
-        let s_g2 = E::G2Affine::read(reader, format)?;
+        let g2 = E::G2::read(reader, format)?;
+        let s_g2 = E::G2::read(reader, format)?;
 
         Ok(Self {
             g,
@@ -255,13 +235,13 @@ impl<E: Engine + Debug> ParamsKZG<E> {
 /// KZG multi-open verification parameters
 #[derive(Clone, Debug)]
 pub struct ParamsVerifierKZG<E: Engine> {
-    pub(crate) s_g2: E::G2Affine,
+    pub(crate) s_g2: E::G2,
 }
 
 impl<E: Engine + Debug> ParamsVerifierKZG<E>
 where
-    E::G1Affine: CurveAffine + ProcessedSerdeObject,
-    E::G2Affine: CurveAffine + ProcessedSerdeObject,
+    E::G1: Curve + ProcessedSerdeObject,
+    E::G2: Curve + ProcessedSerdeObject,
 {
     /// Writes parameters to buffer
     pub fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()> {
@@ -271,7 +251,7 @@ where
 
     /// Reads params from a buffer.
     pub fn read<R: io::Read>(reader: &mut R, format: SerdeFormat) -> io::Result<Self> {
-        let s_g2 = E::G2Affine::read(reader, format)?;
+        let s_g2 = E::G2::read(reader, format)?;
 
         Ok(Self { s_g2 })
     }

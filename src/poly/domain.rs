@@ -528,7 +528,7 @@ fn test_l_i() {
     use rand_core::OsRng;
 
     use crate::utils::arithmetic::{eval_polynomial, lagrange_interpolate};
-    use halo2curves::pasta::pallas::Scalar;
+    use blstrs::Scalar;
     let domain = EvaluationDomain::<Scalar>::new(1, 3);
 
     let mut l = vec![];
@@ -537,7 +537,7 @@ fn test_l_i() {
         points.push(domain.omega.pow([i]));
     }
     for i in 0..8 {
-        let mut l_i = vec![Scalar::zero(); 8];
+        let mut l_i = vec![Scalar::ZERO; 8];
         l_i[i] = Scalar::ONE;
         let l_i = lagrange_interpolate(&points[..], &l_i[..]);
         l.push(l_i);

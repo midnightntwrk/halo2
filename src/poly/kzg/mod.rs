@@ -23,7 +23,7 @@ use crate::poly::query::VerifierQuery;
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery};
 use crate::utils::arithmetic::{
     eval_polynomial, evals_inner_product, inner_product, kate_division, lagrange_interpolate,
-    msm_inner_product, powers, MSM,
+    msm_inner_product, powers, CurveExt, MSM,
 };
 
 #[cfg(feature = "truncated-challenges")]
@@ -34,7 +34,8 @@ use crate::poly::kzg::utils::construct_intermediate_sets;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::helpers::ProcessedSerdeObject;
 use ff::Field;
-use group::Group;
+use group::prime::PrimeCurveAffine;
+use group::{Curve, Group};
 use halo2curves::msm::msm_best;
 use halo2curves::pairing::MultiMillerLoop;
 use halo2curves::CurveAffine;
@@ -48,11 +49,12 @@ pub struct KZGCommitmentScheme<E: Engine> {
 
 impl<E: MultiMillerLoop> PolynomialCommitmentScheme<E::Fr> for KZGCommitmentScheme<E>
 where
-    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
+    E::G1: Default + CurveExt<ScalarExt = E::Fr> + ProcessedSerdeObject,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
 {
     type Parameters = ParamsKZG<E>;
     type VerifierParameters = ParamsVerifierKZG<E>;
-    type Commitment = E::G1Affine;
+    type Commitment = E::G1;
     type VerificationGuard = DualMSM<E>;
 
     fn gen_params(k: u32) -> Self::Parameters {
@@ -69,22 +71,26 @@ where
     ) -> Self::Commitment {
         let mut scalars = Vec::with_capacity(polynomial.len());
         scalars.extend(polynomial.iter());
-        let bases = &params.g;
+        let mut bases = vec![<E::G1 as Curve>::AffineRepr::identity(); params.g.len()];
+        <E::G1 as Curve>::batch_normalize(&params.g, bases.as_mut_slice());
         let size = scalars.len();
         assert!(bases.len() >= size);
-        msm_best(&scalars, &bases[0..size]).into()
+        msm_best(&scalars, &bases[0..size])
     }
 
     fn commit_lagrange(
         params: &Self::Parameters,
         poly: &Polynomial<E::Fr, LagrangeCoeff>,
-    ) -> E::G1Affine {
+    ) -> E::G1 {
         let mut scalars = Vec::with_capacity(poly.len());
         scalars.extend(poly.iter());
-        let bases = &params.g_lagrange;
         let size = scalars.len();
+
+        let mut bases = vec![<E::G1 as Curve>::AffineRepr::identity(); params.g.len()];
+        <E::G1 as Curve>::batch_normalize(&params.g_lagrange, bases.as_mut_slice());
         assert!(bases.len() >= size);
-        msm_best(&scalars, &bases[0..size]).into()
+
+        msm_best(&scalars, &bases[0..size])
     }
 
     fn multi_open<'com, T: Transcript>(
@@ -94,14 +100,14 @@ where
     ) -> Result<(), Error>
     where
         E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
-        E::G1Affine: Hashable<T::Hash>,
+        E::G1: Hashable<T::Hash>,
     {
         // Refer to the halo2 book for docs:
         // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        let (poly_map, point_sets) = construct_intermediate_sets(prover_query);
+        let (poly_map, point_sets) = construct_intermediate_sets(prover_query)?;
 
         let mut q_polys = vec![vec![]; point_sets.len()];
 
@@ -179,27 +185,28 @@ where
         transcript.write(&pi).map_err(|_| Error::OpeningError)
     }
 
-    fn multi_prepare<T: Transcript>(
-        verifier_query: impl IntoIterator<Item = VerifierQuery<E::Fr, KZGCommitmentScheme<E>>> + Clone,
+    fn multi_prepare<'com, T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<'com, E::Fr, KZGCommitmentScheme<E>>>
+            + Clone,
         transcript: &mut T,
     ) -> Result<DualMSM<E>, Error>
     where
         E::Fr: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
-        E::G1Affine: Hashable<T::Hash>,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr>,
     {
         // Refer to the halo2 book for docs:
         // https://zcash.github.io/halo2/design/proving-system/multipoint-opening.html
         let x1: E::Fr = transcript.squeeze_challenge();
         let x2: E::Fr = transcript.squeeze_challenge();
 
-        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query);
+        let (commitment_map, point_sets) = construct_intermediate_sets(verifier_query)?;
 
         let mut q_coms: Vec<_> = vec![vec![]; point_sets.len()];
         let mut q_eval_sets = vec![vec![]; point_sets.len()];
 
         for com_data in commitment_map.into_iter() {
             let mut msm = MSMKZG::new();
-            msm.append_term(E::Fr::ONE, com_data.commitment.into());
+            msm.append_term(E::Fr::ONE, *com_data.commitment);
             q_coms[com_data.set_index].push(msm);
             q_eval_sets[com_data.set_index].push(com_data.evals);
         }
@@ -230,7 +237,7 @@ where
             })
             .collect::<Vec<_>>();
 
-        let f_com: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+        let f_com: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
 
         // Sample a challenge x_3 for checking that f(X) was committed to
         // correctly.
@@ -266,7 +273,8 @@ where
         let final_com = {
             let mut coms = q_coms;
             let mut f_com_as_msm = MSMKZG::new();
-            f_com_as_msm.append_term(E::Fr::ONE, f_com.into());
+
+            f_com_as_msm.append_term(E::Fr::ONE, f_com);
             coms.push(f_com_as_msm);
 
             #[cfg(feature = "truncated-challenges")]
@@ -291,14 +299,14 @@ where
             inner_product(&evals, powers)
         };
 
-        let pi: E::G1Affine = transcript.read().map_err(|_| Error::SamplingError)?;
+        let pi: E::G1 = transcript.read().map_err(|_| Error::SamplingError)?;
 
         let mut pi_msm = MSMKZG::<E>::new();
-        pi_msm.append_term(E::Fr::ONE, pi.into());
+        pi_msm.append_term(E::Fr::ONE, pi);
 
         // Scale zπ
         let mut scaled_pi = MSMKZG::<E>::new();
-        scaled_pi.append_term(x3, pi.into());
+        scaled_pi.append_term(x3, pi);
 
         let mut msm_accumulator = DualMSM::new();
 
@@ -309,6 +317,7 @@ where
         msm_accumulator.right.append_term(v, -E::G1::generator()); // -vG
         msm_accumulator.right.add_msm(&scaled_pi); // zπ
 
+        transcript.assert_empty().map_err(|_| Error::OpeningError)?;
         Ok(msm_accumulator)
     }
 }
@@ -320,15 +329,15 @@ mod tests {
     use crate::poly::kzg::KZGCommitmentScheme;
     use crate::poly::{
         query::{ProverQuery, VerifierQuery},
-        Error, EvaluationDomain,
+        EvaluationDomain,
     };
     use crate::transcript::{CircuitTranscript, Hashable, Sampleable, Transcript};
     use crate::utils::arithmetic::eval_polynomial;
     use blake2b_simd::State as Blake2bState;
     use ff::WithSmallOrderMulGroup;
-    use halo2curves::pairing::{Engine, MultiMillerLoop};
+    use halo2curves::pairing::MultiMillerLoop;
     use halo2curves::serde::SerdeObject;
-    use halo2curves::CurveAffine;
+    use halo2curves::{CurveAffine, CurveExt};
     use rand_core::OsRng;
 
     #[test]
@@ -347,21 +356,19 @@ mod tests {
         verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], true);
     }
 
-    fn verify<E: MultiMillerLoop, T: Transcript>(
-        verifier_params: &ParamsVerifierKZG<E>,
-        proof: &[u8],
-        should_fail: bool,
-    ) where
+    fn verify<E, T>(verifier_params: &ParamsVerifierKZG<E>, proof: &[u8], should_fail: bool)
+    where
+        E: MultiMillerLoop,
+        T: Transcript,
         E::Fr: Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
-        E::G1Affine: CurveAffine<ScalarExt = <E as Engine>::Fr, CurveExt = <E as Engine>::G1>
-            + SerdeObject
-            + Hashable<T::Hash>,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
+        E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + SerdeObject,
     {
         let mut transcript = T::init_from_bytes(proof);
 
-        let a: E::G1Affine = transcript.read().unwrap();
-        let b: E::G1Affine = transcript.read().unwrap();
-        let c: E::G1Affine = transcript.read().unwrap();
+        let a: E::G1 = transcript.read().unwrap();
+        let b: E::G1 = transcript.read().unwrap();
+        let c: E::G1 = transcript.read().unwrap();
 
         let x: E::Fr = transcript.squeeze_challenge();
         let y: E::Fr = transcript.squeeze_challenge();
@@ -371,14 +378,14 @@ mod tests {
         let cvy: E::Fr = transcript.read().unwrap();
 
         let valid_queries = std::iter::empty()
-            .chain(Some(VerifierQuery::new(x, a, avx)))
-            .chain(Some(VerifierQuery::new(x, b, bvx)))
-            .chain(Some(VerifierQuery::new(y, c, cvy)));
+            .chain(Some(VerifierQuery::new(x, &a, avx)))
+            .chain(Some(VerifierQuery::new(x, &b, bvx)))
+            .chain(Some(VerifierQuery::new(y, &c, cvy)));
 
         let invalid_queries = std::iter::empty()
-            .chain(Some(VerifierQuery::new(x, a, avx)))
-            .chain(Some(VerifierQuery::new(x, b, avx)))
-            .chain(Some(VerifierQuery::new(y, c, cvy)));
+            .chain(Some(VerifierQuery::new(x, &a, avx)))
+            .chain(Some(VerifierQuery::new(x, &b, avx)))
+            .chain(Some(VerifierQuery::new(y, &c, cvy)));
 
         let queries = if should_fail {
             invalid_queries
@@ -386,23 +393,22 @@ mod tests {
             valid_queries
         };
 
-        let result = KZGCommitmentScheme::multi_prepare(queries, &mut transcript)
-            .map_err(|_| Error::OpeningError);
+        let result = KZGCommitmentScheme::multi_prepare(queries, &mut transcript).unwrap();
 
         if should_fail {
-            assert!(result.unwrap().verify(verifier_params).is_err());
+            assert!(result.verify(verifier_params).is_err());
         } else {
-            assert!(result.unwrap().verify(verifier_params).is_ok());
+            assert!(result.verify(verifier_params).is_ok());
         }
     }
 
-    fn create_proof<E: MultiMillerLoop, T: Transcript>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
+    fn create_proof<E, T>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
     where
+        E: MultiMillerLoop,
+        T: Transcript,
         E::Fr: WithSmallOrderMulGroup<3> + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
-        E::G1Affine: Hashable<T::Hash>
-            + SerdeObject
-            + Default
-            + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
+        E::G1Affine: SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     {
         let k = (kzg_params.g.len() - 1).ilog2() + 1;
         let domain = EvaluationDomain::new(1, k);

@@ -1,4 +1,5 @@
 use crate::poly::query::Query;
+use crate::poly::Error;
 use ff::Field;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
@@ -29,7 +30,7 @@ pub(super) type IntermediateSets<F, Q> = (
 
 pub fn construct_intermediate_sets<F: Field + Ord, I, Q: Query<F>>(
     queries: I,
-) -> IntermediateSets<F, Q>
+) -> Result<IntermediateSets<F, Q>, Error>
 where
     I: IntoIterator<Item = Q> + Clone,
 {
@@ -53,6 +54,9 @@ where
             .iter()
             .position(|comm| comm.commitment == query.get_commitment())
         {
+            if commitment_map[pos].point_indices.contains(point_idx) {
+                return Err(Error::DuplicatedQuery);
+            }
             commitment_map[pos].point_indices.push(*point_idx);
         } else {
             let mut tmp = CommitmentData::new(query.get_commitment());
@@ -138,5 +142,5 @@ where
         }
     }
 
-    (commitment_map, point_sets)
+    Ok((commitment_map, point_sets))
 }

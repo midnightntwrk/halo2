@@ -34,6 +34,8 @@ pub enum Error {
     OpeningError,
     /// Caller needs to re-sample a point
     SamplingError,
+    /// Multiopen argument only supports a single query to the same (commitment, opening) pair.
+    DuplicatedQuery,
 }
 
 /// The basis over which a polynomial is described.
@@ -275,10 +277,12 @@ impl<F: Field, B: Basis> Mul<F> for Polynomial<F, B> {
 
     fn mul(mut self, rhs: F) -> Polynomial<F, B> {
         if rhs == F::ZERO {
-            return Polynomial {
-                values: vec![F::ZERO; self.len()],
-                _marker: PhantomData,
-            };
+            parallelize(&mut self.values, |lhs, _| {
+                for lhs in lhs.iter_mut() {
+                    *lhs = F::ZERO;
+                }
+            });
+            return self;
         }
         if rhs == F::ONE {
             return self;

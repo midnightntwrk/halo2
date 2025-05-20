@@ -225,16 +225,15 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Evaluated<
         iter::empty()
             .chain(self.sets.iter().flat_map(move |set| {
                 iter::empty()
-                    // Open permutation product commitments at x and \omega^{-1} x
                     // Open permutation product commitments at x and \omega x
                     .chain(Some(VerifierQuery::new(
                         x,
-                        set.permutation_product_commitment,
+                        &set.permutation_product_commitment,
                         set.permutation_product_eval,
                     )))
                     .chain(Some(VerifierQuery::new(
                         x_next,
-                        set.permutation_product_commitment,
+                        &set.permutation_product_commitment,
                         set.permutation_product_next_eval,
                     )))
             }))
@@ -242,7 +241,7 @@ impl<F: WithSmallOrderMulGroup<3>, CS: PolynomialCommitmentScheme<F>> Evaluated<
             .chain(self.sets.iter().rev().skip(1).flat_map(move |set| {
                 Some(VerifierQuery::new(
                     x_last,
-                    set.permutation_product_commitment,
+                    &set.permutation_product_commitment,
                     set.permutation_product_last_eval.unwrap(),
                 ))
             }))
@@ -254,11 +253,11 @@ impl<F: PrimeField> CommonEvaluated<F> {
         &'r self,
         vkey: &'r VerifyingKey<F, CS>,
         x: F,
-    ) -> impl Iterator<Item = VerifierQuery<F, CS>> + Clone + 'r {
+    ) -> impl Iterator<Item = VerifierQuery<'r, F, CS>> + Clone {
         // Open permutation commitments for each permutation argument at x
         vkey.commitments
             .iter()
             .zip(self.permutation_evals.iter())
-            .map(move |(&commitment, &eval)| VerifierQuery::new(x, commitment, eval))
+            .map(move |(commitment, &eval)| VerifierQuery::new(x, commitment, eval))
     }
 }

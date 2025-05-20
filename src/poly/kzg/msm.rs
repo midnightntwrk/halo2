@@ -4,8 +4,8 @@ use super::params::ParamsVerifierKZG;
 use crate::poly::commitment::{Guard, PolynomialCommitmentScheme};
 use crate::poly::kzg::KZGCommitmentScheme;
 use crate::poly::Error;
-use crate::utils::arithmetic::parallelize;
 use crate::utils::arithmetic::MSM;
+use crate::utils::arithmetic::{parallelize, CurveExt};
 use crate::utils::helpers::ProcessedSerdeObject;
 use group::prime::PrimeCurveAffine;
 use group::{Curve, Group};
@@ -111,7 +111,8 @@ where
 
 impl<E: MultiMillerLoop> Guard<E::Fr, KZGCommitmentScheme<E>> for DualMSM<E>
 where
-    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + ProcessedSerdeObject,
+    E::G1: Default + CurveExt<ScalarExt = E::Fr> + ProcessedSerdeObject,
+    E::G1Affine: Default + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
 {
     fn verify(
         self,
@@ -164,7 +165,7 @@ where
 
     /// Performs final pairing check with given verifier params and two channel linear combination
     pub fn check(self, params: &ParamsVerifierKZG<E>) -> bool {
-        let s_g2_prepared = E::G2Prepared::from(params.s_g2);
+        let s_g2_prepared = E::G2Prepared::from(params.s_g2.into());
         let n_g2_prepared = E::G2Prepared::from(-E::G2Affine::generator());
 
         let left = self.left.eval();

@@ -8,6 +8,7 @@ use ff::{FromUniformBytes, WithSmallOrderMulGroup};
 use halo2_proofs::poly::commitment::Guard;
 use halo2_proofs::poly::kzg::{params::ParamsKZG, KZGCommitmentScheme};
 use halo2_proofs::transcript::{CircuitTranscript, Hashable, Sampleable, Transcript};
+use halo2_proofs::utils::helpers::ProcessedSerdeObject;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter, Region, SimpleFloorPlanner, Value},
     plonk::*,
@@ -16,7 +17,7 @@ use halo2_proofs::{
 };
 use halo2curves::pairing::{Engine, MultiMillerLoop};
 use halo2curves::serde::SerdeObject;
-use halo2curves::CurveAffine;
+use halo2curves::{CurveAffine, CurveExt};
 use rand_core::OsRng;
 
 // ANCHOR: instructions
@@ -469,8 +470,8 @@ fn test_prover<E: Engine + MultiMillerLoop>(
     instances: Vec<E::Fr>,
 ) -> Vec<u8>
 where
-    E::G1Affine:
-        Default + SerdeObject + Hashable<State> + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+    E::G1: Default + Hashable<State> + CurveExt<ScalarExt = E::Fr> + ProcessedSerdeObject,
+    E::G1Affine: Default + SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
     E::Fr: WithSmallOrderMulGroup<3>
         + FromUniformBytes<64>
         + Sampleable<State>

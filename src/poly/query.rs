@@ -1,5 +1,6 @@
 use ff::PrimeField;
 use std::fmt::Debug;
+use std::ops::Deref;
 
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::{
@@ -43,7 +44,7 @@ pub struct PolynomialPointer<'com, F: PrimeField> {
 
 impl<'com, F: PrimeField> PartialEq for PolynomialPointer<'com, F> {
     fn eq(&self, other: &Self) -> bool {
-        self.poly == other.poly
+        std::ptr::eq(self.poly, other.poly)
     }
 }
 
@@ -62,54 +63,65 @@ impl<'com, F: PrimeField> Query<F> for ProverQuery<'com, F> {
     }
 }
 
-// impl<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> VerifierQuery<'com, F, CS> {
-//     /// Create a new verifier query based on a commitment
-//     pub fn new_commitment(commitment: &'com C, point: C::Scalar, eval: C::Scalar) -> Self {
-//         VerifierQuery {
-//             point,
-//             eval,
-//             commitment: CommitmentReference::Commitment(commitment),
-//         }
-//     }
-//
-//     /// Create a new verifier query based on a linear combination of commitments
-//     pub fn new_msm(msm: &'com M, point: C::Scalar, eval: C::Scalar) -> VerifierQuery<'com, C, M> {
-//         VerifierQuery {
-//             point,
-//             eval,
-//             commitment: CommitmentReference::MSM(msm),
-//         }
-//     }
-// }
+#[derive(Clone, Debug)]
+pub struct CommitmentReference<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>>(
+    &'com CS::Commitment,
+);
+
+impl<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> Copy
+    for CommitmentReference<'com, F, CS>
+{
+}
+
+impl<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> PartialEq
+    for CommitmentReference<'com, F, CS>
+{
+    #![allow(ambiguous_wide_pointer_comparisons)]
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> Deref
+    for CommitmentReference<'com, F, CS>
+{
+    type Target = CS::Commitment;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
 
 /// A polynomial query at a point
 #[derive(Debug, Clone, Copy)]
-pub struct VerifierQuery<F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
+pub struct VerifierQuery<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> {
     /// Point at which polynomial is queried
     pub(crate) point: F,
     /// Commitment to polynomial
-    pub(crate) commitment: CS::Commitment,
+    pub(crate) commitment: CommitmentReference<'com, F, CS>,
     /// Evaluation of polynomial at query point
     pub(crate) eval: F,
 }
 
-impl<F, CS> VerifierQuery<F, CS>
+impl<'com, F, CS> VerifierQuery<'com, F, CS>
 where
     F: PrimeField,
     CS: PolynomialCommitmentScheme<F>,
 {
     /// Create a new verifier query based on a commitment
-    pub fn new(point: F, commitment: CS::Commitment, eval: F) -> Self {
+    pub fn new(point: F, commitment: &'com CS::Commitment, eval: F) -> Self {
         VerifierQuery {
             point,
-            commitment,
+            commitment: CommitmentReference(commitment),
             eval,
         }
     }
 }
 
-impl<F: PrimeField, CS: PolynomialCommitmentScheme<F>> Query<F> for VerifierQuery<F, CS> {
-    type Commitment = CS::Commitment;
+impl<'com, F: PrimeField, CS: PolynomialCommitmentScheme<F>> Query<F>
+    for VerifierQuery<'com, F, CS>
+{
+    type Commitment = CommitmentReference<'com, F, CS>;
     type Eval = F;
 
     fn get_point(&self) -> F {

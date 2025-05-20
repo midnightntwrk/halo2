@@ -3,10 +3,11 @@ use crate::plonk::{k_from_circuit, Circuit};
 use crate::poly::{Coeff, Error, LagrangeCoeff, Polynomial, ProverQuery, VerifierQuery};
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::helpers::ProcessedSerdeObject;
+use core::ops::{Add, Mul};
 use ff::{FromUniformBytes, PrimeField};
 use std::fmt::Debug;
 
-/// Public interface for a Polynomial Commitment Scheme (PCS)
+/// Public interface for a additively homomorphic Polynomial Commitment Scheme (PCS)
 pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     /// Parameters needed to generate a proof in the PCS
     type Parameters: Params;
@@ -15,7 +16,16 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
     type VerifierParameters;
 
     /// Type of a committed polynomial
-    type Commitment: Clone + Copy + Debug + Default + PartialEq + ProcessedSerdeObject + Send + Sync;
+    type Commitment: Clone
+        + Copy
+        + Debug
+        + Default
+        + PartialEq
+        + ProcessedSerdeObject
+        + Send
+        + Sync
+        + Add<Output = Self::Commitment>
+        + Mul<F, Output = Self::Commitment>;
 
     /// Verification guard. Allows for batch verification
     type VerificationGuard: Guard<F, Self>;
@@ -47,13 +57,14 @@ pub trait PolynomialCommitmentScheme<F: PrimeField>: Clone + Debug {
         Self::Commitment: Hashable<T::Hash>;
 
     /// Verify an multi-opening proof for a given set of [VerifierQuery]'s.
-    fn multi_prepare<T: Transcript>(
-        verifier_query: impl IntoIterator<Item = VerifierQuery<F, Self>> + Clone,
+    /// The function fails if the transcript has trailing bytes.
+    fn multi_prepare<'com, T: Transcript>(
+        verifier_query: impl IntoIterator<Item = VerifierQuery<'com, F, Self>> + Clone,
         transcript: &mut T,
     ) -> Result<Self::VerificationGuard, Error>
     where
         F: Sampleable<T::Hash> + Ord + Hashable<T::Hash>,
-        Self::Commitment: Hashable<T::Hash>;
+        Self::Commitment: 'com + Hashable<T::Hash>;
 }
 
 /// Interface for verifier finalizer

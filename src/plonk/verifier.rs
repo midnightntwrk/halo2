@@ -7,7 +7,10 @@ use crate::poly::VerifierQuery;
 use crate::transcript::{read_n, Hashable, Sampleable, Transcript};
 use crate::utils::arithmetic::compute_inner_product;
 
-/// Prepares a plonk proof into a PCS instance that can be finalized or batched.
+/// Prepares a plonk proof into a PCS instance that can be finalized or batched. It is
+/// responsibility of the verifier to check the validity of the instance columns.
+///
+/// The verifier will error if there are trailing bytes in the transcript.
 pub fn prepare<F, CS: PolynomialCommitmentScheme<F>, T: Transcript>(
     vk: &VerifyingKey<F, CS>,
     instances: &[&[&[F]]],
@@ -38,6 +41,7 @@ where
             for value in instance.iter() {
                 transcript.common(value)?;
             }
+            transcript.common(&F::from_u128(instance.len() as u128))?;
         }
     }
 
@@ -165,7 +169,7 @@ where
         .collect::<Result<Vec<_>, _>>()?;
 
     let fixed_evals = read_n(transcript, vk.cs.fixed_queries.len())?;
-    let vanishing = vanishing.evaluate_after_x(vk, transcript)?;
+    let vanishing = vanishing.evaluate_after_x(transcript)?;
 
     let permutations_common = vk.permutation.evaluate(transcript)?;
 
@@ -261,7 +265,7 @@ where
                     ))
             });
 
-        vanishing.verify(expressions, y, xn)?
+        vanishing.verify(expressions, y, xn)
     };
 
     let queries = advice_commitments
@@ -276,7 +280,7 @@ where
                         move |(query_index, &(column, at))| {
                             VerifierQuery::new(
                                 vk.domain.rotate_omega(x, at),
-                                advice_commitments[column.index()],
+                                &advice_commitments[column.index()],
                                 advice_evals[query_index],
                             )
                         },
@@ -293,7 +297,7 @@ where
                 .map(|(query_index, &(column, at))| {
                     VerifierQuery::new(
                         vk.domain.rotate_omega(x, at),
-                        vk.fixed_commitments[column.index()],
+                        &vk.fixed_commitments[column.index()],
                         fixed_evals[query_index],
                     )
                 }),
