@@ -353,14 +353,13 @@ mod tests {
         verify::<Bn256, CircuitTranscript<Blake2bState>>(&verifier_params, &proof[..], true);
     }
 
-    fn verify<E: MultiMillerLoop, T: Transcript>(
-        verifier_params: &ParamsVerifierKZG<E>,
-        proof: &[u8],
-        should_fail: bool,
-    ) where
+    fn verify<E, T>(verifier_params: &ParamsVerifierKZG<E>, proof: &[u8], should_fail: bool)
+    where
+        E: MultiMillerLoop,
+        T: Transcript,
         E::Fr: Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
-        E::G1: SerdeObject + Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr>,
-        E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
+        E::G1Affine: CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1> + SerdeObject,
     {
         let mut transcript = T::init_from_bytes(proof);
 
@@ -400,12 +399,13 @@ mod tests {
         }
     }
 
-    fn create_proof<E: MultiMillerLoop, T: Transcript>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
+    fn create_proof<E, T>(kzg_params: &ParamsKZG<E>) -> Vec<u8>
     where
+        E: MultiMillerLoop,
+        T: Transcript,
         E::Fr: WithSmallOrderMulGroup<3> + Hashable<T::Hash> + Sampleable<T::Hash> + Ord,
+        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr, AffineExt = E::G1Affine>,
         E::G1Affine: SerdeObject + CurveAffine<ScalarExt = E::Fr, CurveExt = E::G1>,
-
-        E::G1: Hashable<T::Hash> + CurveExt<ScalarExt = E::Fr> + SerdeObject + Default,
     {
         let k = (kzg_params.g.len() - 1).ilog2() + 1;
         let domain = EvaluationDomain::new(1, k);
