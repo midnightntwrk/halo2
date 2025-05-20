@@ -707,3 +707,195 @@ impl<F: Field> Assignment<F> for DevAssembly<F> {
         // Do nothing; we don't care about namespaces in this context.
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit::{Layouter, SimpleFloorPlanner};
+    use crate::plonk::{create_proof, keygen_pk, keygen_vk_with_k};
+    use crate::plonk::{Expression, Fixed, TableColumn};
+    use crate::poly::kzg::params::ParamsKZG;
+    use crate::poly::kzg::KZGCommitmentScheme;
+    use crate::poly::Rotation;
+    use crate::transcript::{CircuitTranscript, Transcript};
+    use blake2b_simd::State;
+    use blstrs::{Bls12, Scalar};
+    use rand_core::{OsRng, RngCore};
+
+    #[derive(Clone, Copy)]
+    struct StandardPlonkConfig {
+        a: Column<Advice>,
+        b: Column<Advice>,
+        c: Column<Advice>,
+        q_a: Column<Fixed>,
+        q_b: Column<Fixed>,
+        q_c: Column<Fixed>,
+        q_ab: Column<Fixed>,
+        constant: Column<Fixed>,
+        instance: Column<Instance>,
+        table_selector: Selector,
+        table: TableColumn,
+    }
+
+    impl StandardPlonkConfig {
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self {
+            let [a, b, c] = std::array::from_fn(|_| meta.advice_column());
+            let [q_a, q_b, q_c, q_ab, constant] = std::array::from_fn(|_| meta.fixed_column());
+            let instance = meta.instance_column();
+
+            [a, b, c].map(|column| meta.enable_equality(column));
+
+            let table_selector = meta.complex_selector();
+            let sl = meta.lookup_table_column();
+
+            meta.lookup("lookup", |meta| {
+                let selector = meta.query_selector(table_selector);
+                let not_selector = Expression::Constant(Scalar::ONE) - selector.clone();
+                let advice = meta.query_advice(a, Rotation::cur());
+                vec![(selector * advice + not_selector, sl)]
+            });
+
+            meta.create_gate(
+                "q_a·a + q_b·b + q_c·c + q_ab·a·b + constant + instance = 0",
+                |meta| {
+                    let [a, b, c] =
+                        [a, b, c].map(|column| meta.query_advice(column, Rotation::cur()));
+                    let [q_a, q_b, q_c, q_ab, constant] = [q_a, q_b, q_c, q_ab, constant]
+                        .map(|column| meta.query_fixed(column, Rotation::cur()));
+                    let instance = meta.query_instance(instance, Rotation::cur());
+                    Some(
+                        q_a * a.clone()
+                            + q_b * b.clone()
+                            + q_c * c
+                            + q_ab * a * b
+                            + constant
+                            + instance,
+                    )
+                },
+            );
+
+            StandardPlonkConfig {
+                a,
+                b,
+                c,
+                q_a,
+                q_b,
+                q_c,
+                q_ab,
+                constant,
+                instance,
+                table_selector,
+                table: sl,
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct StandardPlonk(Scalar);
+
+    impl Circuit<Scalar> for StandardPlonk {
+        type Config = StandardPlonkConfig;
+        type FloorPlanner = SimpleFloorPlanner;
+        #[cfg(feature = "circuit-params")]
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            StandardPlonkConfig::configure(meta)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), Error> {
+            layouter.assign_table(
+                || "8-bit table",
+                |mut table| {
+                    for row in 0u64..(1 << 8) {
+                        table.assign_cell(
+                            || format!("row {row}"),
+                            config.table,
+                            row as usize,
+                            || Value::known(Scalar::from(row + 1)),
+                        )?;
+                    }
+
+                    Ok(())
+                },
+            )?;
+
+            layouter.assign_region(
+                || "",
+                |mut region| {
+                    config.table_selector.enable(&mut region, 0)?;
+                    region.assign_advice(|| "", config.a, 0, || Value::known(self.0))?;
+                    region.assign_fixed(|| "", config.q_a, 0, || Value::known(-Scalar::ONE))?;
+
+                    region.assign_advice(
+                        || "",
+                        config.a,
+                        1,
+                        || Value::known(-Scalar::from(5u64)),
+                    )?;
+                    for (idx, column) in (1..).zip([
+                        config.q_a,
+                        config.q_b,
+                        config.q_c,
+                        config.q_ab,
+                        config.constant,
+                    ]) {
+                        region.assign_fixed(
+                            || "",
+                            column,
+                            1,
+                            || Value::known(Scalar::from(idx as u64)),
+                        )?;
+                    }
+
+                    let a =
+                        region.assign_advice(|| "", config.a, 2, || Value::known(Scalar::ONE))?;
+                    a.copy_advice(|| "", &mut region, config.b, 3)?;
+                    a.copy_advice(|| "", &mut region, config.c, 4)?;
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    #[test]
+    fn cost_model() {
+        let k = 9;
+        let mut random_byte = [0u8; 1];
+        OsRng::fill_bytes(&mut OsRng, &mut random_byte);
+        let circuit = StandardPlonk(Scalar::from(random_byte[0] as u64));
+
+        let params = ParamsKZG::<Bls12>::unsafe_setup(k, OsRng);
+        let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit, k)
+            .expect("vk should not fail");
+        let pk = keygen_pk(vk, &circuit).expect("pk should not fail");
+
+        let instances: &[&[Scalar]] = &[&[circuit.0]];
+        let mut transcript = CircuitTranscript::<State>::init();
+
+        create_proof::<Scalar, KZGCommitmentScheme<Bls12>, _, _>(
+            &params,
+            &pk,
+            &[circuit.clone()],
+            &[instances],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("proof generation should not fail");
+
+        let circuit_model =
+            from_circuit_to_circuit_model::<_, _, 48, 32>(Some(k), &circuit, instances[0].len());
+
+        let proof = transcript.finalize();
+
+        assert_eq!(circuit_model.size, proof.len());
+    }
+}
