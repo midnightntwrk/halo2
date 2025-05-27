@@ -45,8 +45,20 @@ use group::Group;
 use halo2curves::CurveAffine;
 
 extern "C" {
-    fn sppark_msm(
-        out: *mut c_void,
+    fn gpu_msm(
+        out1: *mut c_void,
+        out2: *mut c_void,
+        points_with_infinity: *const c_void,
+        npoints: usize,
+        scalars: *const c_void,
+        ffi_affine_sz: usize,
+    ) -> sppark::Error;
+}
+
+extern "C" {
+    fn gpu_msm_lagrange(
+        out1: *mut c_void,
+        out2: *mut c_void,
         points_with_infinity: *const c_void,
         npoints: usize,
         scalars: *const c_void,
@@ -60,6 +72,7 @@ pub fn msm_gpu<C: CurveAffine>(
     points: &[C],
     scalars: &[C::Scalar],
 ) ->  C::Curve {
+
     let npoints = points.len();
 
     if npoints != scalars.len() {
@@ -67,9 +80,11 @@ pub fn msm_gpu<C: CurveAffine>(
     }
 
     let mut ret = C::Curve::identity();
+    let mut ret2 = C::Curve::identity();
     let err = unsafe {
-        sppark_msm(
+        gpu_msm(
             &mut ret as *mut _ as *mut _,
+            &mut ret2 as *mut _ as *mut _,
             points.as_ptr() as *const _,
             npoints,
             scalars.as_ptr() as *const _,
@@ -81,7 +96,40 @@ pub fn msm_gpu<C: CurveAffine>(
         panic!("MSM GPU error: {}", String::from(err));
     }
 
-    ret
+    ret + ret2
+}
+
+#[allow(unsafe_code)]
+/// Perform MSM GPU
+pub fn msm_gpu_lagrange<C: CurveAffine>(
+    points: &[C],
+    scalars: &[C::Scalar],
+) ->  C::Curve {
+
+    let npoints = points.len();
+
+    if npoints != scalars.len() {
+        panic!("length mismatch")
+    }
+
+    let mut ret = C::Curve::identity();
+    let mut ret2 = C::Curve::identity();
+    let err = unsafe {
+        gpu_msm_lagrange(
+            &mut ret as *mut _ as *mut _,
+            &mut ret2 as *mut _ as *mut _,
+            points.as_ptr() as *const _,
+            npoints,
+            scalars.as_ptr() as *const _,
+            std::mem::size_of::<C>(),
+        )
+    };
+
+    if err.code != 0 {
+        panic!("MSM GPU error: {}", String::from(err));
+    }
+
+    ret + ret2
 }
 
 extern "C" {
