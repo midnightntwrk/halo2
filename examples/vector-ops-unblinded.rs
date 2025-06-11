@@ -20,9 +20,6 @@ use halo2curves::serde::SerdeObject;
 use halo2curves::{CurveAffine, CurveExt};
 use rand_core::OsRng;
 
-#[cfg(feature = "committed-instances")]
-use halo2_proofs::poly::commitment::PolynomialCommitmentScheme;
-
 // ANCHOR: instructions
 trait NumericInstructions<F: Field>: Chip<F> {
     /// Variable representing a number.
@@ -485,13 +482,9 @@ where
     let vk = keygen_vk_with_k(&params, &circuit, k).unwrap();
     let pk = keygen_pk(vk.clone(), &circuit).unwrap();
 
-    let mut poly = vk.get_domain().empty_lagrange();
-    for (poly_eval, value) in poly.iter_mut().zip(instances.iter()) {
-        *poly_eval = *value;
-    }
-
     #[cfg(feature = "committed-instances")]
-    let instance_commitment = KZGCommitmentScheme::<E>::commit_lagrange(&params, &poly);
+    let instance_commitment =
+        commit_to_instances::<E::Fr, KZGCommitmentScheme<E>>(&params, &vk.get_domain(), &instances);
 
     let proof = {
         let mut transcript = CircuitTranscript::<State>::init();

@@ -23,8 +23,29 @@ use crate::{
 use crate::circuit::Value;
 use crate::poly::batch_invert_rational;
 use crate::poly::commitment::PolynomialCommitmentScheme;
+#[cfg(feature = "committed-instances")]
+use crate::poly::EvaluationDomain;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::rational::Rational;
+
+#[cfg(feature = "committed-instances")]
+/// Commit to a vector of raw instances. This function can be used to prepare
+/// the committed instances that the verifier will be provided with when this
+/// feature is enabled.
+pub fn commit_to_instances<F, CS: PolynomialCommitmentScheme<F>>(
+    params: &CS::Parameters,
+    domain: &EvaluationDomain<F>,
+    instances: &[F],
+) -> CS::Commitment
+where
+    F: WithSmallOrderMulGroup<3> + Ord + FromUniformBytes<64>,
+{
+    let mut poly = domain.empty_lagrange();
+    for (poly_eval, value) in poly.iter_mut().zip(instances.iter()) {
+        *poly_eval = *value;
+    }
+    CS::commit_lagrange(params, &poly)
+}
 
 /// This creates a proof for the provided `circuit` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
