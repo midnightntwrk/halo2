@@ -39,6 +39,10 @@ pub fn create_proof<
     params: &CS::Parameters,
     pk: &ProvingKey<F, CS>,
     circuits: &[ConcreteCircuit],
+    // The prover needs to get all instances in non-committed form. However,
+    // the first `nb_committed_instances` instance columns are dedicated for
+    // instances that the verifier receives in committed form.
+    #[cfg(feature = "committed-instances")] nb_committed_instances: usize,
     instances: &[&[&[F]]],
     mut rng: impl RngCore + CryptoRng,
     transcript: &mut T,
@@ -51,12 +55,17 @@ where
         + Ord
         + FromUniformBytes<64>,
 {
+    #[cfg(not(feature = "committed-instances"))]
+    let nb_committed_instances: usize = 0;
+
     if circuits.len() != instances.len() {
         return Err(Error::InvalidInstances);
     }
 
-    for instance in instances.iter() {
-        if instance.len() != pk.vk.cs.num_instance_columns {
+    for instances in instances.iter() {
+        if instances.len() != pk.vk.cs.num_instance_columns
+            || instances.len() < nb_committed_instances
+        {
             return Err(Error::InvalidInstances);
         }
     }
@@ -85,17 +94,30 @@ where
         .map(|instance| -> Result<InstanceSingle<F>, Error> {
             let instance_values = instance
                 .iter()
-                .map(|values| {
+                .enumerate()
+                .map(|(i, values)| {
+                    // Committed instances go first.
+                    let is_committed_instance = i < nb_committed_instances;
                     let mut poly = domain.empty_lagrange();
                     assert_eq!(poly.len(), domain.n as usize);
                     if values.len() > (poly.len() - (meta.blinding_factors() + 1)) {
                         return Err(Error::InstanceTooLarge);
                     }
-                    transcript.common(&F::from_u128(values.len() as u128))?;
-                    for (poly, value) in poly.iter_mut().zip(values.iter()) {
-                        transcript.common(value)?;
-                        *poly = *value;
+                    if !is_committed_instance {
+                        transcript.common(&F::from_u128(values.len() as u128))?;
                     }
+
+                    for (poly_eval, value) in poly.iter_mut().zip(values.iter()) {
+                        if !is_committed_instance {
+                            transcript.common(value)?;
+                        }
+                        *poly_eval = *value;
+                    }
+
+                    if is_committed_instance {
+                        transcript.common(&CS::commit_lagrange(params, &poly))?;
+                    }
+
                     Ok(poly)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -481,6 +503,20 @@ where
 
     let x: F = transcript.squeeze_challenge();
 
+    // Compute and hash instance evals for the committed part of each circuit instance
+    for instance in instance.iter() {
+        // Evaluate polynomials at omega^i x
+        for &(column, at) in meta.instance_queries.iter() {
+            if column.index() < nb_committed_instances {
+                let eval = eval_polynomial(
+                    &instance.instance_polys[column.index()],
+                    domain.rotate_omega(x, at),
+                );
+                transcript.write(&eval)?;
+            }
+        }
+    }
+
     // Compute and hash advice evals for each circuit instance
     for advice in advice.iter() {
         // Evaluate polynomials at omega^i x
@@ -537,12 +573,24 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let queries = advice
+    let queries = instance
         .iter()
+        .zip(advice.iter())
         .zip(permutations.iter())
         .zip(lookups.iter())
-        .flat_map(|((advice, permutation), lookups)| {
+        .flat_map(|(((instance, advice), permutation), lookups)| {
             iter::empty()
+                .chain(
+                    pk.vk
+                        .cs
+                        .instance_queries
+                        .iter()
+                        .take(nb_committed_instances)
+                        .map(move |&(column, at)| ProverQuery {
+                            point: domain.rotate_omega(x, at),
+                            poly: &instance.instance_polys[column.index()],
+                        }),
+                )
                 .chain(
                     pk.vk
                         .cs
@@ -619,6 +667,8 @@ fn test_create_proof() {
         &params,
         &pk,
         &[MyCircuit, MyCircuit],
+        #[cfg(feature = "committed-instances")]
+        0,
         &[],
         OsRng,
         &mut transcript,
@@ -630,6 +680,8 @@ fn test_create_proof() {
         &params,
         &pk,
         &[MyCircuit, MyCircuit],
+        #[cfg(feature = "committed-instances")]
+        0,
         &[&[], &[]],
         OsRng,
         &mut transcript,
