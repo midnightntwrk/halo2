@@ -20,6 +20,9 @@ use halo2curves::serde::SerdeObject;
 use halo2curves::{CurveAffine, CurveExt};
 use rand_core::OsRng;
 
+#[cfg(feature = "committed-instances")]
+use halo2_proofs::poly::commitment::PolynomialCommitmentScheme;
+
 // ANCHOR: instructions
 trait NumericInstructions<F: Field>: Chip<F> {
     /// Variable representing a number.
@@ -480,7 +483,15 @@ where
 {
     let params: ParamsKZG<E> = ParamsKZG::unsafe_setup(k, OsRng);
     let vk = keygen_vk_with_k(&params, &circuit, k).unwrap();
-    let pk = keygen_pk(vk, &circuit).unwrap();
+    let pk = keygen_pk(vk.clone(), &circuit).unwrap();
+
+    let mut poly = vk.get_domain().empty_lagrange();
+    for (poly_eval, value) in poly.iter_mut().zip(instances.iter()) {
+        *poly_eval = *value;
+    }
+
+    #[cfg(feature = "committed-instances")]
+    let instance_commitment = KZGCommitmentScheme::<E>::commit_lagrange(&params, &poly);
 
     let proof = {
         let mut transcript = CircuitTranscript::<State>::init();
@@ -489,6 +500,8 @@ where
             &params,
             &pk,
             &[circuit],
+            #[cfg(feature = "committed-instances")]
+            1,
             &[&[&instances]],
             OsRng,
             &mut transcript,
@@ -501,9 +514,18 @@ where
     let accepted = {
         let mut transcript = CircuitTranscript::<State>::init_from_bytes(&proof[..]);
 
-        prepare::<E::Fr, KZGCommitmentScheme<E>, _>(pk.get_vk(), &[&[&instances]], &mut transcript)
-            .unwrap()
-            .verify(&params.verifier_params())
+        prepare::<E::Fr, KZGCommitmentScheme<E>, _>(
+            pk.get_vk(),
+            #[cfg(feature = "committed-instances")]
+            &[&[instance_commitment]],
+            #[cfg(feature = "committed-instances")]
+            &[&[]],
+            #[cfg(not(feature = "committed-instances"))]
+            &[&[&instances]],
+            &mut transcript,
+        )
+        .unwrap()
+        .verify(&params.verifier_params())
     };
 
     assert_eq!(accepted.is_ok(), expected);
