@@ -524,7 +524,7 @@ where
 
     let x: F = transcript.squeeze_challenge();
 
-    // Compute and hash instance evals for the committed part of each circuit instance
+    // Compute and hash evals for the polynomials of the committed instances of each circuit
     for instance in instance.iter() {
         // Evaluate polynomials at omega^i x
         for &(column, at) in meta.instance_queries.iter() {
