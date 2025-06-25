@@ -1,0 +1,16 @@
+BasedOnStyle: Google
+IndentWidth: 4  
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 90
+BraceWrapping:
+  AfterClass:             true
+  AfterControlStatement:  true
+  AfterEnum:              true
+  AfterFunction:          true
+  AfterNamespace:         true
+  BeforeElse:             true
+  IndentBraces:           false
+SpacesBeforeTrailingComments: 1
+SpaceBeforeParens: ControlStatements 
+PointerAlignment: Left

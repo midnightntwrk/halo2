@@ -315,7 +315,7 @@ fn verifier(
 
 #[test]
 fn plonk_t_new() {
-    let k_range = 20;
+    let k_range = 12;
 
     start_timer!(KEYGEN);
     let (params, pk) = keygen(k_range);

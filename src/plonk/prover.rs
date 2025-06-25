@@ -21,12 +21,9 @@ use crate::{
 };
 
 use crate::circuit::Value;
-use crate::poly::batch_invert_rational;
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::transcript::{Hashable, Sampleable, Transcript};
 use crate::utils::rational::Rational;
-use crate::{start_timer, end_timer};
-use std::{thread, time::Duration};
 
 /// This creates a proof for the provided `circuit` when given the public
 /// parameters `params` and the proving key [`ProvingKey`] that was
@@ -106,6 +103,7 @@ where
                 .map(|poly| {
                     let lagrange_vec = domain.lagrange_from_vec(poly.to_vec());
                     domain.lagrange_to_coeff(lagrange_vec)
+
                 })
                 .collect();
 
@@ -267,13 +265,14 @@ where
     }
 
     let (advice, challenges) = {
+        
         let mut advice = vec![
             AdviceSingle::<F, LagrangeCoeff> {
                 advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
             };
             instances.len()
         ];
-        
+                
         let mut challenges = HashMap::<usize, F>::with_capacity(meta.num_challenges);
 
         let unusable_rows_start = domain.n as usize - (meta.blinding_factors() + 1);
@@ -308,7 +307,7 @@ where
                     usable_rows: ..unusable_rows_start,
                     _marker: std::marker::PhantomData,
                 };
-
+                
                 // Synthesize the circuit to obtain the witness and other information.
                 ConcreteCircuit::FloorPlanner::synthesize(
                     &mut witness,
@@ -317,20 +316,25 @@ where
                     meta.constants.clone(),
                 )?;
 
-                let mut advice_values = batch_invert_rational::<F>(
-                    witness
-                        .advice
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(column_index, advice)| {
-                            if column_indices.contains(&column_index) {
-                                Some(advice)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                );
+                let mut advice_values = witness
+                    .advice
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(column_index, advice)| {
+                        if column_indices.contains(&column_index) {
+                            Some(advice)
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|poly| {
+                        let values = poly.values.into_iter().map(|a| a.numerator()).collect();
+                        Polynomial {
+                            values,
+                            _marker: poly._marker,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                
                 for (column_index, advice_values) in column_indices.iter().zip(&mut advice_values) {
                     if !witness.unblinded_advice.contains(column_index) {
@@ -347,7 +351,8 @@ where
                
                 let advice_commitments: Vec<_> = advice_values
                     .iter()
-                    .map(|poly| CS::commit_lagrange(params, poly))
+                    .map(|poly|{ 
+                        CS::commit_lagrange(params, poly)})
                     .collect();
 
                 for commitment in &advice_commitments {
@@ -377,7 +382,6 @@ where
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: F = transcript.squeeze_challenge();
 
-    
     let lookups: Vec<Vec<lookup::prover::Permuted<F>>> = instance
         .iter()
         .zip(advice.iter())
@@ -454,7 +458,8 @@ where
         .map(|AdviceSingle { advice_polys }| AdviceSingle {
             advice_polys: advice_polys
                 .into_iter()
-                .map(|poly| domain.lagrange_to_coeff(poly))
+                .map(|poly| {
+                    domain.lagrange_to_coeff(poly)})
                 .collect::<Vec<_>>(),
         })
         .collect();

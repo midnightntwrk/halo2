@@ -86,6 +86,67 @@ impl ValueSource {
             ValueSource::PreviousValue() => *previous_value,
         }
     }
+
+    pub fn to_ffi(&self) -> crate::ValueSourceFFI {
+        match self {
+            ValueSource::Constant(i) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Constant,
+                param0: *i,
+                param1: 0,
+            },
+            ValueSource::Intermediate(i) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Intermediate,
+                param0: *i,
+                param1: 0,
+            },
+            ValueSource::Fixed(col, rot) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Fixed,
+                param0: *col,
+                param1: *rot,
+            },
+            ValueSource::Advice(col, rot) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Advice,
+                param0: *col,
+                param1: *rot,
+            },
+            ValueSource::Instance(col, rot) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Instance,
+                param0: *col,
+                param1: *rot,
+            },
+            ValueSource::Challenge(i) => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Challenge,
+                param0: *i,
+                param1: 0,
+            },
+            ValueSource::Beta() => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Beta,
+                param0: 0,
+                param1: 0,
+            },
+            ValueSource::Gamma() => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Gamma,
+                param0: 0,
+                param1: 0,
+            },
+            ValueSource::Theta() => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Theta,
+                param0: 0,
+                param1: 0,
+            },
+            ValueSource::Y() => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::Y,
+                param0: 0,
+                param1: 0,
+            },
+            ValueSource::PreviousValue() => crate::ValueSourceFFI {
+                kind: crate::ValueSourceKind::PreviousValue,
+                param0: 0,
+                param1: 0,
+            },
+        }
+    }
+
 }
 
 /// Calculation
@@ -161,6 +222,89 @@ impl Calculation {
             Calculation::Store(v) => get_value(v),
         }
     }
+
+    pub fn to_ffi(&self, arena: &mut Vec<crate::ValueSourceFFI>) -> crate::CalculationFFI {
+        let dummy = crate::ValueSourceFFI {
+            kind: crate::ValueSourceKind::Constant,
+            param0: 0,
+            param1: 0,
+        };
+
+        match self {
+            Calculation::Add(a, b) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Add,
+                a: a.to_ffi(),
+                b: b.to_ffi(),
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Sub(a, b) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Sub,
+                a: a.to_ffi(),
+                b: b.to_ffi(),
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Mul(a, b) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Mul,
+                a: a.to_ffi(),
+                b: b.to_ffi(),
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Square(a) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Square,
+                a: a.to_ffi(),
+                b: dummy,
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Double(a) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Double,
+                a: a.to_ffi(),
+                b: dummy,
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Negate(a) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Negate,
+                a: a.to_ffi(),
+                b: dummy,
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Store(a) => crate::CalculationFFI {
+                kind: crate::CalculationKind::Store,
+                a: a.to_ffi(),
+                b: dummy,
+                extra: dummy,
+                horner_parts_ptr: std::ptr::null(),
+                horner_parts_len: 0,
+            },
+            Calculation::Horner(start, parts, factor) => {
+                let start_ffi = start.to_ffi();
+                let factor_ffi = factor.to_ffi();
+                let offset = arena.len();
+                arena.extend(parts.iter().map(|p| p.to_ffi()));
+                let ptr = arena[offset..].as_ptr();
+                let len = parts.len();
+                crate::CalculationFFI {
+                    kind: crate::CalculationKind::Horner,
+                    a: start_ffi,
+                    b: dummy,
+                    extra: factor_ffi,
+                    horner_parts_ptr: ptr,
+                    horner_parts_len: len,
+                }
+            }
+        }
+    }
 }
 
 /// Evaluator
@@ -201,6 +345,20 @@ pub struct CalculationInfo {
     pub calculation: Calculation,
     /// Target
     pub target: usize,
+}
+
+impl CalculationInfo {
+    pub fn to_ffi(&self, arena: &mut Vec<crate::ValueSourceFFI>) -> crate::CalculationInfoFFI {
+        crate::CalculationInfoFFI {
+            calculation: self.calculation.to_ffi(arena),
+            target: self.target,
+        }
+    }
+}
+
+// for fix size polys!
+pub fn extract_inner_ptrs_of_poly<F, B>(polys: &[Polynomial<F, B>]) -> Vec<*const F> {
+    polys.iter().map(|poly| poly.values.as_ptr()).collect()
 }
 
 impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
@@ -310,41 +468,27 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
         let mut values = domain.empty_extended();
 
         // Core expression evaluations
-        let num_threads = rayon::current_num_threads();
         for (((advice, instance), lookups), permutation) in advice
             .iter()
             .zip(instance.iter())
             .zip(lookups.iter())
             .zip(permutations.iter())
         {
-            // Custom gates
-            rayon::scope(|scope| {
-                let chunk_size = (size + num_threads - 1) / num_threads;
-                for (thread_idx, values) in values.chunks_mut(chunk_size).enumerate() {
-                    let start = thread_idx * chunk_size;
-                    scope.spawn(move |_| {
-                        let mut eval_data = self.custom_gates.instance();
-                        for (i, value) in values.iter_mut().enumerate() {
-                            let idx = start + i;
-                            *value = self.custom_gates.evaluate(
-                                &mut eval_data,
-                                fixed,
-                                advice,
-                                instance,
-                                challenges,
-                                &beta,
-                                &gamma,
-                                &theta,
-                                &y,
-                                value,
-                                idx,
-                                rot_scale,
-                                isize,
-                            );
-                        }
-                    });
-                }
-            });
+            // GPU Implementation of "Core expression evaluations"
+            let mut arena = Vec::new();
+            let ffi_structs: Vec<crate::CalculationInfoFFI> = self.custom_gates.calculations
+            .iter()
+            .map(|c| c.to_ffi(&mut arena))
+            .collect();
+    
+            let advice_poly_ptr = extract_inner_ptrs_of_poly(advice);
+            let instance_poly_ptr = extract_inner_ptrs_of_poly(instance);
+            let fixed_poly_ptr = extract_inner_ptrs_of_poly(fixed);
+            
+            let rotation_rot: Vec<i32> = self.custom_gates.rotations.iter().map(|rot| *rot).collect();
+
+            crate::custom_gates_evaluation_r(&ffi_structs, &fixed_poly_ptr, &advice_poly_ptr, &instance_poly_ptr,
+            challenges, &beta, &gamma, &theta, &y, &mut values.values, &self.custom_gates.constants, &rotation_rot, &rot_scale, &isize);
 
             // Permutations
             let sets = &permutation.sets;
@@ -705,7 +849,7 @@ impl<F: PrimeField> GraphEvaluator<F> {
         for (rot_idx, rot) in self.rotations.iter().enumerate() {
             data.rotations[rot_idx] = get_rotation_idx(idx, *rot, rot_scale, isize);
         }
-
+        
         // All calculations, with cached intermediate results
         for calc in self.calculations.iter() {
             data.intermediates[calc.target] = calc.calculation.evaluate(
@@ -726,6 +870,60 @@ impl<F: PrimeField> GraphEvaluator<F> {
 
         // Return the result of the last calculation (if any)
         if let Some(calc) = self.calculations.last() {
+            data.intermediates[calc.target]
+        } else {
+            F::ZERO
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn evaluate_gpu_test<B: Basis>(
+        &self,
+        rotation_input: &[i32],
+        calculations: &[CalculationInfo],
+        data: &mut EvaluationData<F>,
+        fixed: &[Polynomial<F, B>],
+        advice: &[Polynomial<F, B>],
+        instance: &[Polynomial<F, B>],
+        challenges: &[F],
+        beta: &F,
+        gamma: &F,
+        theta: &F,
+        y: &F,
+        previous_value: &F,
+        idx: usize,
+        rot_scale: i32,
+        isize: i32,
+    ) -> F {
+        // All rotation index values
+        let mut rot_new: Vec<usize> = Vec::new();
+        for (rot_idx, rot) in rotation_input.iter().enumerate() {
+            //data.rotations[rot_idx] = get_rotation_idx(idx, *rot, rot_scale, isize);
+            rot_new.push(get_rotation_idx(idx, *rot, rot_scale, isize));
+        }
+        
+        // All calculations, with cached intermediate results
+        //for calc in self.calculations.iter() {
+        for calc in calculations.iter() {
+            data.intermediates[calc.target] = calc.calculation.evaluate(
+                //&data.rotations,
+                &rot_new,
+                &self.constants,
+                &data.intermediates,
+                fixed,
+                advice,
+                instance,
+                challenges,
+                beta,
+                gamma,
+                theta,
+                y,
+                previous_value,
+            );
+        }
+
+        // Return the result of the last calculation (if any)
+        if let Some(calc) = calculations.last() {
             data.intermediates[calc.target]
         } else {
             F::ZERO
