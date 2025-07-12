@@ -356,6 +356,11 @@ extern "C" RustError::by_value custom_gates_evaluation(
         size_t* horner_index_device_ptrs = &horner_index_values[0];
         gpu.HtoD(horner_index_device_ptrs, horner_index.data(), horner_index.size());
 
+        const fr_t zero_fr = fr_t{};
+        auto const_at = [&](size_t idx, const fr_t* arr, size_t arr_len) -> fr_t {
+            return (arr_len && idx < arr_len) ? arr[idx] : zero_fr;
+        };
+
         for (size_t outer = 0; outer < num_parts; outer++) {
             for (size_t i = 0; i < calculations_count; ++i) {
                 const auto& info = calculations[i];
@@ -364,20 +369,16 @@ extern "C" RustError::by_value custom_gates_evaluation(
                 switch (calc.kind) {
                     case CalculationKind::Add: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
                         ResolvedInput in_b = get_resolve_input(
-                            calc.b,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.b.param0]),
+                            calc.b, const_at(calc.b.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.b.param0]),
+                            const_at(calc.b.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant && !in_b.is_constant) {
@@ -414,20 +415,16 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Sub: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
                         ResolvedInput in_b = get_resolve_input(
-                            calc.b,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.b.param0]),
+                            calc.b, const_at(calc.b.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.b.param0]),
+                            const_at(calc.b.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant && !in_b.is_constant) {
@@ -464,20 +461,16 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Mul: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
                         ResolvedInput in_b = get_resolve_input(
-                            calc.b,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.b.param0]),
+                            calc.b, const_at(calc.b.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.b.param0]),
+                            const_at(calc.b.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant && !in_b.is_constant) {
@@ -514,12 +507,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Square: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant) {
@@ -542,12 +533,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Double: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant) {
@@ -570,12 +559,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Negate: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         if (!in_a.is_constant) {
@@ -598,12 +585,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Store: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         fr_t* output_d = intermediate_device_ptrs + (info.target * csize);
@@ -619,12 +604,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
                     }
                     case CalculationKind::Horner: {
                         ResolvedInput in_a = get_resolve_input(
-                            calc.a,
-                            (constants_ptr_len == 0 ? fr_t{} : constants[calc.a.param0]),
+                            calc.a, const_at(calc.a.param0, constants, constants_ptr_len),
                             intermediate_device_ptrs, fixed_device_ptrs,
                             advice_device_ptrs, instance_device_ptrs,
-                            (challenges_ptr_len == 0 ? fr_t{}
-                                                     : challenges[calc.a.param0]),
+                            const_at(calc.a.param0, challenges, challenges_ptr_len),
                             *beta, *gamma, *theta, *y, prev_device_ptrs, csize, isize);
 
                         // Intermediate
