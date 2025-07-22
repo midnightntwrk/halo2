@@ -609,7 +609,7 @@ mod tests {
 
         let vk = keygen_vk_with_k::<_, KZGCommitmentScheme<Bls12>, _>(&params, &circuit1, K)
             .expect("keygen_vk should not fail");
-        let pk = keygen_pk(vk, &circuit1).expect("keygen_pk should not fail");
+        let pk = keygen_pk(vk.clone(), &circuit1).expect("keygen_pk should not fail");
 
         // Compute folding traces
         let now = Instant::now();
