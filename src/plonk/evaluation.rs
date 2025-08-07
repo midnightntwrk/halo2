@@ -1,14 +1,18 @@
 use crate::plonk::{lookup, permutation, Any, ProvingKey};
+use crate::plonk::permutation::prover::CommittedSet;
 use crate::poly::commitment::PolynomialCommitmentScheme;
 use crate::poly::Basis;
 use crate::{
     poly::{Coeff, ExtendedLagrangeCoeff, Polynomial, Rotation},
     utils::arithmetic::parallelize,
 };
+
 use ff::{PrimeField, WithSmallOrderMulGroup};
 use group::ff::Field;
 
+
 use super::{ConstraintSystem, Expression};
+use crate::{start_timer, end_timer};
 
 /// Return the index in the polynomial of size `isize` after rotation `rot`.
 fn get_rotation_idx(idx: usize, rot: i32, rot_scale: i32, isize: i32) -> usize {
@@ -361,6 +365,15 @@ pub fn extract_inner_ptrs_of_poly<F, B>(polys: &[Polynomial<F, B>]) -> Vec<*cons
     polys.iter().map(|poly| poly.values.as_ptr()).collect()
 }
 
+
+pub fn extract_inner_ptrs_of_set_poly<F: PrimeField>(sets: &[CommittedSet<F>]) -> Vec<*const F> {
+    sets.iter()
+    .map(|set| {
+        set.permutation_product_poly.values.as_ptr()}
+    )
+    .collect()
+}
+
 impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
     /// Creates a new evaluation structure
     pub fn new(cs: &ConstraintSystem<F>) -> Self {
@@ -445,35 +458,15 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
         let l_active_row = &pk.l_active_row;
         let p = &pk.vk.cs.permutation;
 
-        // Calculate the advice and instance cosets
-        let advice: Vec<Vec<Polynomial<F, ExtendedLagrangeCoeff>>> = advice_polys
-            .iter()
-            .map(|advice_polys| {
-                advice_polys
-                    .iter()
-                    .map(|poly| domain.coeff_to_extended(poly.clone()))
-                    .collect()
-            })
-            .collect();
-        let instance: Vec<Vec<Polynomial<F, ExtendedLagrangeCoeff>>> = instance_polys
-            .iter()
-            .map(|instance_polys| {
-                instance_polys
-                    .iter()
-                    .map(|poly| domain.coeff_to_extended(poly.clone()))
-                    .collect()
-            })
-            .collect();
-
         let mut values = domain.empty_extended();
 
         // Core expression evaluations
-        for (((advice, instance), lookups), permutation) in advice
+        for (((advice, instance), lookups), permutation) in advice_polys
             .iter()
-            .zip(instance.iter())
+            .zip(instance_polys.iter())
             .zip(lookups.iter())
             .zip(permutations.iter())
-        {
+        {   
             // GPU Implementation of "Core expression evaluations"
             let mut arena = Vec::new();
             let ffi_structs: Vec<crate::CalculationInfoFFI> = self.custom_gates.calculations
@@ -487,170 +480,61 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
             
             let rotation_rot: Vec<i32> = self.custom_gates.rotations.iter().map(|rot| *rot).collect();
 
+            let g_coset_value = pk.vk.domain.g_coset;
+            let g_coset_inv_value: F = g_coset_value.square(); 
+
+            let small_sizex = advice[0].values.len() as i32;
+
+            let sets = &permutation.sets;
+            let round1_flag = if sets.is_empty() { 1 } else { 0 };
+            let round2_flag = if lookups.is_empty() { 1 } else { 0 };
+
             crate::custom_gates_evaluation_r(&ffi_structs, &fixed_poly_ptr, &advice_poly_ptr, &instance_poly_ptr,
-            challenges, &beta, &gamma, &theta, &y, &mut values.values, &self.custom_gates.constants, &rotation_rot, &rot_scale, &isize);
+            challenges, &beta, &gamma, &theta, &y, &mut values.values, &self.custom_gates.constants, &rotation_rot, &rot_scale, &isize,
+            &l0.values, &l_last.values, &l_active_row.values, &g_coset_value, &g_coset_inv_value, &small_sizex, &round1_flag);
 
             // Permutations
-            let sets = &permutation.sets;
+            
             if !sets.is_empty() {
                 let blinding_factors = pk.vk.cs.blinding_factors();
                 let last_rotation = Rotation(-((blinding_factors + 1) as i32));
                 let chunk_len = pk.vk.cs.degree() - 2;
                 let delta_start = beta * &pk.vk.domain.g_coset;
+             
+                // Permutation constraints GPU SIDE
+                //let permutation_product_cosets_ptr = extract_inner_ptrs_of_poly(&permutation_product_cosets);
+                let permutation_product_poly = extract_inner_ptrs_of_set_poly(&sets);
+                let pk_cosets_ptr = extract_inner_ptrs_of_poly(&pk.permutation.cosets);                
+                let columns_ffi_structs: Vec<crate::ColumnFFI> = p.columns
+                .iter()
+                .map(|c| c.to_ffi())
+                .collect();
+                
+                let chunk_len32: i32 = chunk_len as i32;
+                let small_size = sets[0].permutation_product_poly.values.len() as i32;
 
-                let permutation_product_cosets: Vec<Polynomial<F, ExtendedLagrangeCoeff>> = sets
-                    .iter()
-                    .map(|set| domain.coeff_to_extended(set.permutation_product_poly.clone()))
-                    .collect();
-
-                let first_set_permutation_product_coset =
-                    permutation_product_cosets.first().unwrap();
-                let last_set_permutation_product_coset = permutation_product_cosets.last().unwrap();
-
-                // Permutation constraints
-                parallelize(&mut values, |values, start| {
-                    let mut beta_term = extended_omega.pow_vartime([start as u64, 0, 0, 0]);
-                    for (i, value) in values.iter_mut().enumerate() {
-                        let idx = start + i;
-                        let r_next = get_rotation_idx(idx, 1, rot_scale, isize);
-                        let r_last = get_rotation_idx(idx, last_rotation.0, rot_scale, isize);
-
-                        // Enforce only for the first set.
-                        // l_0(X) * (1 - z_0(X)) = 0
-                        *value = *value * y
-                            + ((one - first_set_permutation_product_coset[idx]) * l0[idx]);
-                        // Enforce only for the last set.
-                        // l_last(X) * (z_l(X)^2 - z_l(X)) = 0
-                        *value = *value * y
-                            + ((last_set_permutation_product_coset[idx]
-                                * last_set_permutation_product_coset[idx]
-                                - last_set_permutation_product_coset[idx])
-                                * l_last[idx]);
-                        // Except for the first set, enforce.
-                        // l_0(X) * (z_i(X) - z_{i-1}(\omega^(last) X)) = 0
-                        for set_idx in 0..sets.len() {
-                            if set_idx != 0 {
-                                *value = *value * y
-                                    + ((permutation_product_cosets[set_idx][idx]
-                                        - permutation_product_cosets[set_idx - 1][r_last])
-                                        * l0[idx]);
-                            }
-                        }
-                        // And for all the sets we enforce:
-                        // (1 - (l_last(X) + l_blind(X))) * (
-                        //   z_i(\omega X) \prod_j (p(X) + \beta s_j(X) + \gamma)
-                        // - z_i(X) \prod_j (p(X) + \delta^j \beta X + \gamma)
-                        // )
-                        let mut current_delta = delta_start * beta_term;
-                        for ((permutation_product_coset, columns), cosets) in
-                            permutation_product_cosets
-                                .iter()
-                                .zip(p.columns.chunks(chunk_len))
-                                .zip(pk.permutation.cosets.chunks(chunk_len))
-                        {
-                            let mut left = permutation_product_coset[r_next];
-                            for (values, permutation) in columns
-                                .iter()
-                                .map(|&column| match column.column_type() {
-                                    Any::Advice(_) => &advice[column.index()],
-                                    Any::Fixed => &fixed[column.index()],
-                                    Any::Instance => &instance[column.index()],
-                                })
-                                .zip(cosets.iter())
-                            {
-                                left *= values[idx] + beta * permutation[idx] + gamma;
-                            }
-
-                            let mut right = permutation_product_coset[idx];
-                            for values in columns.iter().map(|&column| match column.column_type() {
-                                Any::Advice(_) => &advice[column.index()],
-                                Any::Fixed => &fixed[column.index()],
-                                Any::Instance => &instance[column.index()],
-                            }) {
-                                right *= values[idx] + current_delta + gamma;
-                                current_delta *= &F::DELTA;
-                            }
-
-                            *value = *value * y + ((left - right) * l_active_row[idx]);
-                        }
-                        beta_term *= &extended_omega;
-                    }
-                });
+                crate::permutations_evaluation_r(&columns_ffi_structs, &permutation_product_poly, &pk_cosets_ptr, &advice_poly_ptr, &instance_poly_ptr, &fixed_poly_ptr,
+                    &mut values.values ,&l0.values, &l_last.values, &l_active_row.values,
+                    &delta_start, &F::DELTA, &beta, &gamma, &y, &extended_omega, &chunk_len32, &last_rotation.0,
+                    &rot_scale, &isize, &g_coset_value, &g_coset_inv_value, &small_size, &round2_flag);
             }
 
             // Lookups
             for (n, lookup) in lookups.iter().enumerate() {
-                // Polynomials required for this lookup.
-                // Calculated here so these only have to be kept in memory for the short time
-                // they are actually needed.
-                let product_coset = pk.vk.domain.coeff_to_extended(lookup.product_poly.clone());
-                let permuted_input_coset = pk
-                    .vk
-                    .domain
-                    .coeff_to_extended(lookup.permuted_input_poly.clone());
-                let permuted_table_coset = pk
-                    .vk
-                    .domain
-                    .coeff_to_extended(lookup.permuted_table_poly.clone());
+                let round3_flag = if n == lookups.len() - 1 { 1 } else { 0 };
+                
+                let mut arena_lookups = Vec::with_capacity(1024);
+                let ffi_structs_lookups: Vec<crate::CalculationInfoFFI> = self.lookups[n].calculations
+                .iter()
+                .map(|c| c.to_ffi(&mut arena_lookups))
+                .collect();
 
-                // Lookup constraints
-                parallelize(&mut values, |values, start| {
-                    let lookup_evaluator = &self.lookups[n];
-                    let mut eval_data = lookup_evaluator.instance();
-                    for (i, value) in values.iter_mut().enumerate() {
-                        let idx = start + i;
+                let rotation_rot_lookups: Vec<i32> = self.lookups[n].rotations.iter().map(|rot| *rot).collect();
 
-                        let table_value = lookup_evaluator.evaluate(
-                            &mut eval_data,
-                            fixed,
-                            advice,
-                            instance,
-                            challenges,
-                            &beta,
-                            &gamma,
-                            &theta,
-                            &y,
-                            &F::ZERO,
-                            idx,
-                            rot_scale,
-                            isize,
-                        );
-
-                        let r_next = get_rotation_idx(idx, 1, rot_scale, isize);
-                        let r_prev = get_rotation_idx(idx, -1, rot_scale, isize);
-
-                        let a_minus_s = permuted_input_coset[idx] - permuted_table_coset[idx];
-                        // l_0(X) * (1 - z(X)) = 0
-                        *value = *value * y + ((one - product_coset[idx]) * l0[idx]);
-                        // l_last(X) * (z(X)^2 - z(X)) = 0
-                        *value = *value * y
-                            + ((product_coset[idx] * product_coset[idx] - product_coset[idx])
-                                * l_last[idx]);
-                        // (1 - (l_last(X) + l_blind(X))) * (
-                        //   z(\omega X) (a'(X) + \beta) (s'(X) + \gamma)
-                        //   - z(X) (\theta^{m-1} a_0(X) + ... + a_{m-1}(X) + \beta)
-                        //          (\theta^{m-1} s_0(X) + ... + s_{m-1}(X) + \gamma)
-                        // ) = 0
-                        *value = *value * y
-                            + ((product_coset[r_next]
-                                * (permuted_input_coset[idx] + beta)
-                                * (permuted_table_coset[idx] + gamma)
-                                - product_coset[idx] * table_value)
-                                * l_active_row[idx]);
-                        // Check that the first values in the permuted input expression and permuted
-                        // fixed expression are the same.
-                        // l_0(X) * (a'(X) - s'(X)) = 0
-                        *value = *value * y + (a_minus_s * l0[idx]);
-                        // Check that each value in the permuted lookup input expression is either
-                        // equal to the value above it, or the value at the same index in the
-                        // permuted table expression.
-                        // (1 - (l_last + l_blind)) * (a′(X) − s′(X))⋅(a′(X) − a′(\omega^{-1} X)) = 0
-                        *value = *value * y
-                            + (a_minus_s
-                                * (permuted_input_coset[idx] - permuted_input_coset[r_prev])
-                                * l_active_row[idx]);
-                    }
-                });
+                crate::lookups_evaluation_r(&ffi_structs_lookups,
+                challenges, &beta, &gamma, &theta, &y, &mut values.values, &self.lookups[n].constants, &rotation_rot_lookups,
+                 &rot_scale, &isize ,&lookup.product_poly.values, &lookup.permuted_input_poly.values, &lookup.permuted_table_poly.values,
+                &g_coset_value, &g_coset_inv_value, &round3_flag);
             }
         }
         values

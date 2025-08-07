@@ -280,6 +280,30 @@ __global__ void horner_kernel(fr_t* input1, fr_t* input2, fr_t* output, const fr
     output[tid] = value;
 }
 
+__global__ void horner_c_kernel(fr_t input1, fr_t* input2, fr_t* output, const fr_t y,
+                                const size_t* horner_index, size_t horner_index_size,
+                                const size_t size) {
+    size_t tid = threadIdx.x + (size_t)blockIdx.x * blockDim.x;
+
+    if (tid >= size) return;
+
+    fr_t y_local = y;
+
+    fr_t value = input1;
+
+    for (int i = 0; i < horner_index_size; i++) {
+        size_t horner_index_i = horner_index[i];
+        horner_index_i = horner_index_i * size;
+
+        fr_t part = input2[tid + horner_index_i];
+
+        value = value * y_local;
+        value = value + part;
+    }
+
+    output[tid] = value;
+}
+
 // isize should be power of 2!
 __device__ inline std::size_t get_rotation_idx(std::size_t idx, int rot, int rot_scale,
                                                int isize) {

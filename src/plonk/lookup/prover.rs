@@ -12,6 +12,8 @@ use group::ff::BatchInvert;
 use rand_core::{CryptoRng, RngCore};
 use std::{collections::BTreeMap, iter};
 
+use crate::{start_timer, end_timer};
+
 #[derive(Debug)]
 pub(in crate::plonk) struct Permuted<F: PrimeField> {
     compressed_input_expression: Polynomial<F, LagrangeCoeff>,
@@ -68,6 +70,7 @@ impl<F: WithSmallOrderMulGroup<3> + Ord> Argument<F> {
         F: FromUniformBytes<64>,
         CS::Commitment: Hashable<T::Hash>,
     {
+
         // Closure to get values of expressions and compress them
         let compress_expressions = |expressions: &[Expression<F>]| {
             let compressed_expression = expressions
@@ -88,7 +91,7 @@ impl<F: WithSmallOrderMulGroup<3> + Ord> Argument<F> {
                 });
             compressed_expression
         };
-
+        
         // Get values of input expressions involved in the lookup and compress them
         let compressed_input_expression = compress_expressions(&self.input_expressions);
 

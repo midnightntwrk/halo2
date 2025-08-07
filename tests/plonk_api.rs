@@ -272,7 +272,8 @@ fn prover(
     let mut rng = ChaCha20Rng::from_entropy();
 
     // Generate multiple inputs
-    let num_inputs = 4;
+    //let num_inputs = 4;
+    let num_inputs = 9;
     let inputs: Vec<Value<Fr>> = (0..num_inputs)
         .map(|_| Value::known(Fr::random(&mut rng)))
         .collect();
@@ -300,7 +301,8 @@ fn verifier(
     vk: &VerifyingKey<Fr, KZGCommitmentScheme<Bls12>>,
     proof: &[u8],
 ) {
-    let num_inputs = 4;
+    //let num_inputs = 4;
+    let num_inputs = 9;
     let public_instances: Vec<Fr> = (0..num_inputs).map(|_| common!(Fr)).collect();
     let mut transcript = CircuitTranscript::init_from_bytes(proof);
     assert!(prepare::<Fr, KZGCommitmentScheme<Bls12>, _>(

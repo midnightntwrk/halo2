@@ -33,6 +33,25 @@ pub struct Column<C: ColumnType> {
     column_type: C,
 }
 
+impl Column<Any> {
+    pub fn to_ffi(&self) -> crate::ColumnFFI {
+        match self.column_type() {
+            Any::Advice(_) => crate::ColumnFFI {
+                index: self.index(),
+                column_type: crate::AnyFFI::Advice,
+            },
+            Any::Fixed => crate::ColumnFFI {
+                index: self.index(),
+                column_type: crate::AnyFFI::Fixed,
+            },
+            Any::Instance => crate::ColumnFFI {
+                index: self.index(),
+                column_type: crate::AnyFFI::Instance,
+            }
+        }
+    }
+}
+
 impl<C: ColumnType> Column<C> {
     #[cfg(test)]
     pub(crate) fn new(index: usize, column_type: C) -> Self {
