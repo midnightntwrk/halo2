@@ -253,6 +253,7 @@ pub enum AnyFFI {
     Fixed,
     Instance,
 }
+
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct ColumnFFI {
@@ -299,6 +300,10 @@ extern "C" {
 
         g_coset: *const c_void,
         g_coset_inv: *const c_void,
+
+        pk_coset_ptrs: *const *const c_void,
+        pk_coset_ptr_len: usize,
+
         small_size: c_int,
         flag: c_int,
     ) -> sppark::Error;
@@ -323,6 +328,9 @@ pub fn custom_gates_evaluation_r<T: std::clone::Clone>(
     l_active_row: &[T],
 
     g_coset: &T, g_coset_inv: &T,
+
+    pk_coset_ptrs: &[*const T],
+
     small_size: &i32,
     flag: &i32
 ) 
@@ -361,6 +369,8 @@ pub fn custom_gates_evaluation_r<T: std::clone::Clone>(
 
         g_coset_p.as_ptr() as *const c_void,
         g_coset_inv_p.as_ptr() as *const c_void,
+
+        pk_coset_ptrs.as_ptr() as *const *const c_void, pk_coset_ptrs.len(),
         *small_size,
         *flag
         );
@@ -376,28 +386,7 @@ extern "C" {
         permutation_ptrs: *const *const c_void,
         permutation_ptr_len: usize,
 
-        pk_coset_ptrs: *const *const c_void,
-        pk_coset_ptr_len: usize,
-
-        advice_ptrs: *const *const c_void,
-        advice_ptr_len: usize,
-
-        instance_ptrs: *const *const c_void,
-        instance_ptr_len: usize,
-
-        fixed_ptrs: *const *const c_void,
-        fixed_ptr_len: usize,
-
         value: *mut c_void,
-
-        l0_ptr: *const c_void,
-        l0_ptr_len: usize,
-
-        l_last_ptr: *const c_void,
-        l_last_ptr_len: usize,
-
-        l_active_row_ptr: *const c_void,
-        l_active_row_ptr_len: usize,
 
         delta_start: *const c_void,
         delta: *const c_void,
@@ -424,17 +413,9 @@ extern "C" {
 pub fn permutations_evaluation_r<T: std::clone::Clone>(
     column: &[ColumnFFI],
     permutation_ptrs: &[*const T],
-    pk_coset_ptrs: &[*const T],
-    advice_ptrs: &[*const T],
-    instance_ptrs: &[*const T],
-    fixed_ptrs: &[*const T],
 
     value: &mut [T],
     
-    l0: &[T],
-    l_last: &[T],
-    l_active_row: &[T],
-
     delta_start: &T, delta: &T,
 
     beta: &T, gamma: &T, y: &T, extended_omega: &T, 
@@ -462,17 +443,9 @@ pub fn permutations_evaluation_r<T: std::clone::Clone>(
     unsafe {
         permutations_evaluation(column.as_ptr(), column.len(),
         permutation_ptrs.as_ptr() as *const *const c_void, permutation_ptrs.len(),
-        pk_coset_ptrs.as_ptr() as *const *const c_void, pk_coset_ptrs.len(),
-        advice_ptrs.as_ptr() as *const *const c_void, advice_ptrs.len(),
-        instance_ptrs.as_ptr() as *const *const c_void, instance_ptrs.len(),
-        fixed_ptrs.as_ptr() as *const *const c_void, fixed_ptrs.len(),
 
         value.as_mut_ptr() as *mut _,
         
-        l0.as_ptr() as *const c_void, l0.len(),
-        l_last.as_ptr() as *const c_void, l_last.len(),
-        l_active_row.as_ptr() as *const c_void, l_active_row.len(),
-
         delta_start_p.as_ptr() as *const c_void,
         delta_p.as_ptr() as *const c_void,
         beta_p.as_ptr() as *const c_void,

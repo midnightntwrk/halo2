@@ -324,17 +324,17 @@ class MemoryPool {
     }
 
     void store_gpu(const gpu_t& gpu, const fr_t* const* fixed_ptrs, size_t fixed_ptr_len,
-                   size_t advice_ptr_len, size_t instance_ptr_len, const fr_t* l0_ptr,
-                   const fr_t* l_last_ptr, const fr_t* l_active_row_ptr,
-                   const fr_t* value_ptr, int isize, bool flag) {
+                   size_t advice_ptr_len, size_t instance_ptr_len,
+                   size_t pk_coset_ptr_len, const fr_t* l0_ptr, const fr_t* l_last_ptr,
+                   const fr_t* l_active_row_ptr, const fr_t* value_ptr, int isize,
+                   bool flag) {
         if (flag) {
-            // if (all_data) {
-            //     cudaFreeAsync(all_data, gpu);
-            //     cudaStreamSynchronize(gpu);
-            // }
+            stream_ = gpu;
+            used_async_alloc_ = true;
 
             size_t total_poly_size =
-                ((fixed_ptr_len + advice_ptr_len + instance_ptr_len) * isize) +
+                ((fixed_ptr_len + advice_ptr_len + instance_ptr_len + pk_coset_ptr_len) *
+                 isize) +
                 (4 * isize);
             cudaMallocAsync(&all_data, total_poly_size * sizeof(fr_t), gpu);
 
@@ -342,7 +342,8 @@ class MemoryPool {
             fixed_device_ptrs = all_data;
             advice_device_ptrs = fixed_device_ptrs + (fixed_ptr_len * isize);
             instance_device_ptrs = advice_device_ptrs + (advice_ptr_len * isize);
-            l0_device_ptr = instance_device_ptrs + (instance_ptr_len * isize);
+            pk_coset_device_ptrs = instance_device_ptrs + (instance_ptr_len * isize);
+            l0_device_ptr = pk_coset_device_ptrs + (pk_coset_ptr_len * isize);
             l_last_device_ptr = l0_device_ptr + isize;
             l_active_row_device_ptr = l_last_device_ptr + isize;
             value_device_ptr = l_active_row_device_ptr + isize;
@@ -351,30 +352,48 @@ class MemoryPool {
                 gpu.HtoD(fixed_device_ptrs + (i * isize), fixed_ptrs[i], isize);
                 CUDA_OK(cudaGetLastError());
             }
-            gpu.sync();
-
-            gpu.HtoD(l0_device_ptr, l0_ptr, isize);
-            CUDA_OK(cudaGetLastError());
-            gpu.sync();
-
-            gpu.HtoD(l_last_device_ptr, l_last_ptr, isize);
-            CUDA_OK(cudaGetLastError());
-            gpu.sync();
-
-            gpu.HtoD(l_active_row_device_ptr, l_active_row_ptr, isize);
-            CUDA_OK(cudaGetLastError());
-            gpu.sync();
 
             gpu.HtoD(value_device_ptr, value_ptr, isize);
-            CUDA_OK(cudaGetLastError());
             gpu.sync();
+            CUDA_OK(cudaGetLastError());
 
             initialized = true;
         }
     }
 
+    void clear(cudaStream_t last_use_stream = nullptr) {
+        if (!all_data) return;
+
+        if (last_use_stream && last_use_stream != stream_) {
+            cudaEvent_t done;
+            cudaEventCreate(&done);
+            cudaEventRecord(done, last_use_stream);
+            cudaStreamWaitEvent(stream_, done, 0);
+            cudaEventDestroy(done);
+        }
+
+        if (used_async_alloc_) {
+            CUDA_OK(cudaFreeAsync(all_data, stream_));
+        } else {
+            void* p = all_data;
+            CUDA_OK(cudaLaunchHostFunc(
+                stream_, [](void* ptr) { cudaFree(ptr); }, p));
+        }
+
+        zero_ptrs();
+    }
+
     ~MemoryPool() {
-        if (all_data) cudaFree(all_data);
+        if (all_data) {
+            if (used_async_alloc_) {
+                cudaFreeAsync(all_data, stream_);
+            } else {
+                void* p = all_data;
+                cudaLaunchHostFunc(
+                    stream_, [](void* ptr) { cudaFree(ptr); }, p);
+            }
+            zero_ptrs();
+        }
     }
 
     MemoryPool(const MemoryPool&) = delete;
@@ -399,6 +418,14 @@ class MemoryPool {
     fr_t* instance_ptr() {
         if (initialized) {
             return instance_device_ptrs;
+        } else {
+            throw std::invalid_argument("Memory Pool was not created yet!");
+        }
+    }
+
+    fr_t* pk_coset_ptr() {
+        if (initialized) {
+            return pk_coset_device_ptrs;
         } else {
             throw std::invalid_argument("Memory Pool was not created yet!");
         }
@@ -439,16 +466,34 @@ class MemoryPool {
    private:
     MemoryPool() = default;
 
-    scalar_t* all_data = nullptr;
+    void zero_ptrs() {
+        all_data = nullptr;
+        initialized = false;
+
+        fixed_device_ptrs = nullptr;
+        advice_device_ptrs = nullptr;
+        instance_device_ptrs = nullptr;
+        pk_coset_device_ptrs = nullptr;
+        l0_device_ptr = nullptr;
+        l_last_device_ptr = nullptr;
+        l_active_row_device_ptr = nullptr;
+        value_device_ptr = nullptr;
+    }
+
+    fr_t* all_data = nullptr;
     bool initialized = false;
 
     fr_t* fixed_device_ptrs = nullptr;
     fr_t* advice_device_ptrs = nullptr;
     fr_t* instance_device_ptrs = nullptr;
+    fr_t* pk_coset_device_ptrs = nullptr;
     fr_t* l0_device_ptr = nullptr;
     fr_t* l_last_device_ptr = nullptr;
     fr_t* l_active_row_device_ptr = nullptr;
     fr_t* value_device_ptr = nullptr;
+
+    cudaStream_t stream_{};
+    bool used_async_alloc_{false};
 };
 
 extern "C" RustError::by_value custom_gates_evaluation(
@@ -462,7 +507,8 @@ extern "C" RustError::by_value custom_gates_evaluation(
 
     const fr_t* l0_ptr, const fr_t* l_last_ptr, const fr_t* l_active_row_ptr,
 
-    const fr_t* g_coset, const fr_t* g_coset_inv, int small_size, const int flag) {
+    const fr_t* g_coset, const fr_t* g_coset_inv, const fr_t* const* pk_coset_ptrs,
+    size_t pk_coset_ptr_len, int small_size, const int flag) {
     constexpr size_t CHUNK_SIZE = 1 << 18; // To minimize memory usage
     const gpu_t& gpu = select_gpu();
 
@@ -480,8 +526,8 @@ extern "C" RustError::by_value custom_gates_evaluation(
 
     try {
         MemoryPool::get_instance().store_gpu(
-            gpu, fixed_ptrs, fixed_ptr_len, advice_ptr_len, instance_ptr_len, l0_ptr,
-            l_last_ptr, l_active_row_ptr, output, isize, true);
+            gpu, fixed_ptrs, fixed_ptr_len, advice_ptr_len, instance_ptr_len,
+            pk_coset_ptr_len, l0_ptr, l_last_ptr, l_active_row_ptr, output, isize, true);
 
         fr_t* fixed_device_ptrs = MemoryPool::get_instance().fix_ptr();
         fr_t* advice_device_ptrs = MemoryPool::get_instance().advice_ptr();
@@ -495,19 +541,30 @@ extern "C" RustError::by_value custom_gates_evaluation(
         fr_t* before_ntt_instance_device_ptrs =
             before_ntt_advice_device_ptrs + (advice_ptr_len * small_size);
 
+        uint32_t log_isize = uint32_t(log2(isize));
+        size_t grid_size_pad = (int)((isize + threads_per_block - 1) / threads_per_block);
+
         for (int i = 0; i < advice_ptr_len; i++) {
-            gpu.HtoD(before_ntt_advice_device_ptrs + (i * small_size), advice_ptrs[i],
-                     small_size);
-            CUDA_OK(cudaGetLastError());
+            gpu[i].HtoD(before_ntt_advice_device_ptrs + (i * small_size), advice_ptrs[i],
+                        small_size);
+            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[i]>>>(
+                before_ntt_advice_device_ptrs + (i * small_size),
+                advice_device_ptrs + (i * isize), *g_coset, *g_coset_inv, small_size);
+            NTT::Base_dev_ptr(gpu[i], advice_device_ptrs + (i * isize), log_isize,
+                              NTT::InputOutputOrder::NN, NTT::Direction::forward,
+                              NTT::Type::standard);
         }
-        gpu.sync();
 
         for (int i = 0; i < instance_ptr_len; i++) {
-            gpu.HtoD(before_ntt_instance_device_ptrs + (i * small_size), instance_ptrs[i],
-                     small_size);
-            CUDA_OK(cudaGetLastError());
+            gpu[i].HtoD(before_ntt_instance_device_ptrs + (i * small_size),
+                        instance_ptrs[i], small_size);
+            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[i]>>>(
+                before_ntt_instance_device_ptrs + (i * small_size),
+                instance_device_ptrs + (i * isize), *g_coset, *g_coset_inv, small_size);
+            NTT::Base_dev_ptr(gpu[i], instance_device_ptrs + (i * isize), log_isize,
+                              NTT::InputOutputOrder::NN, NTT::Direction::forward,
+                              NTT::Type::standard);
         }
-        gpu.sync();
 
         size_t total_intermediate_size = calculations_count * csize;
         gpu_ptr_t<fr_t> intermediate_values(
@@ -529,33 +586,10 @@ extern "C" RustError::by_value custom_gates_evaluation(
         CUDA_OK(cudaGetLastError());
         gpu.sync();
 
-        uint32_t log_isize = uint32_t(log2(isize));
-        size_t grid_size_pad = (int)((isize + threads_per_block - 1) / threads_per_block);
-
-        for (int i = 0; i < advice_ptr_len; i++) {
-            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
-                before_ntt_advice_device_ptrs + (i * small_size),
-                advice_device_ptrs + (i * isize), *g_coset, *g_coset_inv, small_size);
-            NTT::Base_dev_ptr(gpu, advice_device_ptrs + (i * isize), log_isize,
-                              NTT::InputOutputOrder::NN, NTT::Direction::forward,
-                              NTT::Type::standard);
-        }
-
-        for (int i = 0; i < instance_ptr_len; i++) {
-            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
-                before_ntt_instance_device_ptrs + (i * small_size),
-                instance_device_ptrs + (i * isize), *g_coset, *g_coset_inv, small_size);
-            NTT::Base_dev_ptr(gpu, instance_device_ptrs + (i * isize), log_isize,
-                              NTT::InputOutputOrder::NN, NTT::Direction::forward,
-                              NTT::Type::standard);
-        }
-
-        ///////////////////////////////////
         const fr_t zero_fr = fr_t{};
         auto const_at = [&](size_t idx, const fr_t* arr, size_t arr_len) -> fr_t {
             return (arr_len && idx < arr_len) ? arr[idx] : zero_fr;
         };
-        ///////////////////////////////////
 
         for (size_t outer = 0; outer < num_parts; outer++) {
             for (size_t i = 0; i < calculations_count; ++i) {
@@ -826,7 +860,6 @@ extern "C" RustError::by_value custom_gates_evaluation(
                             in_a.pointer + (outer * csize), intermediate_device_ptrs,
                             output_d, in_c.constant, horner_index_device_ptrs,
                             horner_size, csize);
-                        gpu.sync();
                         CUDA_OK(cudaGetLastError());
 
                         break;
@@ -842,20 +875,32 @@ extern "C" RustError::by_value custom_gates_evaluation(
                 gpu.DtoH(output + offset_in,
                          intermediate_device_ptrs + ((calculations_count - 1) * csize),
                          csize);
-
                 CUDA_OK(cudaGetLastError());
-                gpu.sync();
 
-                MemoryPool::get_instance().~MemoryPool();
-                gpu.sync();
+                MemoryPool::get_instance().clear(gpu);
             } else {
                 cudaMemcpyAsync(
                     prev_device_ptrs + offset_in,
                     intermediate_device_ptrs + ((calculations_count - 1) * csize),
                     csize * sizeof(fr_t), cudaMemcpyDeviceToDevice, gpu);
             }
+        }
 
-            gpu.sync();
+        fr_t* pk_coset_device_ptrs = MemoryPool::get_instance().pk_coset_ptr();
+        fr_t* l0_device_ptrs = MemoryPool::get_instance().l0_ptr();
+        fr_t* l_last_device_ptrs = MemoryPool::get_instance().l_last_ptr();
+        fr_t* l_active_row_device_ptrs = MemoryPool::get_instance().l_active_row_ptr();
+        if (!flag_c) {
+            for (int i = 0; i < pk_coset_ptr_len; i++) {
+                gpu[0].HtoD(pk_coset_device_ptrs + (i * isize), pk_coset_ptrs[i], isize);
+                CUDA_OK(cudaGetLastError());
+            }
+
+            gpu[0].HtoD(l0_device_ptrs, l0_ptr, isize);
+
+            gpu[0].HtoD(l_last_device_ptrs, l_last_ptr, isize);
+
+            gpu[0].HtoD(l_active_row_device_ptrs, l_active_row_ptr, isize);
         }
 
         CUDA_OK(cudaGetLastError());
@@ -904,24 +949,6 @@ fr_t* get_any_input(const ColumnFFI& src, fr_t* advice, fr_t* fixed, fr_t* insta
         default:
             throw std::invalid_argument("Unknown ValueSourceKind");
     }
-}
-
-__global__ void pow_kernel(fr_t base, fr_t* __restrict__ out) {
-    const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    fr_t base_g = base;
-    uint32_t p = tid;
-
-    fr_t sqr = base_g;
-    base_g = fr_t::csel(base_g, fr_t::one(), p & 1);
-
-#pragma unroll 1
-    while (p >>= 1) {
-        sqr *= sqr;
-        if (p & 1) base_g *= sqr;
-    }
-
-    out[tid] = base_g;
 }
 
 __global__ void pow_mul_kernel(fr_t base, fr_t* __restrict__ out,
@@ -1084,28 +1111,14 @@ __global__ void permutation_stage2_kernel(fr_t* value, const fr_t* left,
 
 extern "C" RustError::by_value permutations_evaluation(
     const ColumnFFI* column, size_t column_count, const fr_t* const* permutation_ptrs,
-    size_t permutation_ptr_len, const fr_t* const* pk_coset_ptrs, size_t pk_coset_ptr_len,
-    const fr_t* const* advice_ptrs, size_t advice_ptr_len,
-    const fr_t* const* instance_ptrs, size_t instance_ptr_len,
-    const fr_t* const* fixed_ptrs, size_t fixed_ptr_len,
-
-    fr_t* value,
-
-    const fr_t* l0_ptr, size_t l0_ptr_len, const fr_t* l_last_ptr, size_t l_last_ptr_len,
-    const fr_t* l_active_row_ptr, size_t l_active_row_ptr_len,
-
-    const fr_t* delta_start, const fr_t* delta, const fr_t* beta, const fr_t* gamma,
-    const fr_t* y, const fr_t* extended_omega,
-
-    int chunk_len, int last_rotation_value, int rot_scale, int isize,
-
-    const fr_t* g_coset, const fr_t* g_coset_inv, int small_size, const int flag) {
+    size_t permutation_ptr_len, fr_t* value, const fr_t* delta_start, const fr_t* delta,
+    const fr_t* beta, const fr_t* gamma, const fr_t* y, const fr_t* extended_omega,
+    int chunk_len, int last_rotation_value, int rot_scale, int isize, const fr_t* g_coset,
+    const fr_t* g_coset_inv, int small_size, const int flag) {
     const gpu_t& gpu = select_gpu();
-
     size_t csize = isize;
     const int threads_per_block = 256;
     size_t grid_size = (int)((csize + threads_per_block - 1) / threads_per_block);
-
     bool flag_c = flag == 1 ? true : false;
 
     try {
@@ -1113,51 +1126,31 @@ extern "C" RustError::by_value permutations_evaluation(
         fr_t* advice_device_ptrs = MemoryPool::get_instance().advice_ptr();
         fr_t* instance_device_ptrs = MemoryPool::get_instance().instance_ptr();
         fr_t* value_device_ptrs = MemoryPool::get_instance().value_ptr();
+        fr_t* pk_coset_device_ptrs = MemoryPool::get_instance().pk_coset_ptr();
 
-        size_t total_poly_size = ((permutation_ptr_len + pk_coset_ptr_len) * isize) +
-                                 isize + isize + isize + isize +
-                                 (permutation_ptr_len * small_size);
+        fr_t* l0_device_ptrs = MemoryPool::get_instance().l0_ptr();
+        fr_t* l_last_device_ptrs = MemoryPool::get_instance().l_last_ptr();
+        fr_t* l_active_row_device_ptrs = MemoryPool::get_instance().l_active_row_ptr();
+
+        size_t total_poly_size =
+            ((permutation_ptr_len)*isize) + (permutation_ptr_len * small_size);
         gpu_ptr_t<fr_t> input_polys((fr_t*)gpu.Dmalloc(total_poly_size * sizeof(fr_t)));
         CUDA_OK(cudaGetLastError());
         fr_t* permutation_device_ptrs = &input_polys[0];
-        fr_t* pk_coset_device_ptrs =
+        fr_t* before_ntt_permutation_device_ptrs =
             permutation_device_ptrs + (permutation_ptr_len * isize);
-        fr_t* l0_device_ptrs = pk_coset_device_ptrs + (pk_coset_ptr_len * isize);
-        fr_t* l_last_device_ptrs = l0_device_ptrs + (isize);
-        fr_t* l_active_row_device_ptrs = l_last_device_ptrs + (isize);
-        fr_t* before_ntt_permutation_device_ptrs = l_active_row_device_ptrs + (isize);
-
-        for (int i = 0; i < permutation_ptr_len; i++) {
-            gpu.HtoD(before_ntt_permutation_device_ptrs + (i * small_size),
-                     permutation_ptrs[i], small_size);
-            CUDA_OK(cudaGetLastError());
-        }
-        gpu.sync();
-
-        for (int i = 0; i < pk_coset_ptr_len; i++) {
-            gpu.HtoD(pk_coset_device_ptrs + (i * isize), pk_coset_ptrs[i], isize);
-            CUDA_OK(cudaGetLastError());
-        }
-        gpu.sync();
-
-        gpu.HtoD(l0_device_ptrs, l0_ptr, isize);
-        CUDA_OK(cudaGetLastError());
-
-        gpu.HtoD(l_last_device_ptrs, l_last_ptr, isize);
-        CUDA_OK(cudaGetLastError());
-
-        gpu.HtoD(l_active_row_device_ptrs, l_active_row_ptr, isize);
-        CUDA_OK(cudaGetLastError());
 
         uint32_t log_isize = uint32_t(log2(isize));
         size_t grid_size_pad = (int)((isize + threads_per_block - 1) / threads_per_block);
 
         for (int i = 0; i < permutation_ptr_len; i++) {
-            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
+            gpu[i].HtoD(before_ntt_permutation_device_ptrs + (i * small_size),
+                        permutation_ptrs[i], small_size);
+            zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[i]>>>(
                 before_ntt_permutation_device_ptrs + (i * small_size),
                 permutation_device_ptrs + (i * isize), *g_coset, *g_coset_inv,
                 small_size);
-            NTT::Base_dev_ptr(gpu, permutation_device_ptrs + (i * isize), log_isize,
+            NTT::Base_dev_ptr(gpu[i], permutation_device_ptrs + (i * isize), log_isize,
                               NTT::InputOutputOrder::NN, NTT::Direction::forward,
                               NTT::Type::standard);
         }
@@ -1166,11 +1159,10 @@ extern "C" RustError::by_value permutations_evaluation(
         CUDA_OK(cudaGetLastError());
         fr_t* power_memory_ptrs = &power_memory[0];
 
-        // pow_kernel<<<grid_size, threads_per_block, 0, gpu>>>(*extended_omega,
-        // power_memory_ptrs);
         pow_mul_kernel<<<grid_size, threads_per_block, 0, gpu>>>(
             *extended_omega, power_memory_ptrs, *delta_start);
         CUDA_OK(cudaGetLastError());
+        gpu.sync();
 
         fr_t* first_permutation_device_ptrs = permutation_device_ptrs;
         fr_t* last_permutation_device_ptrs =
@@ -1239,17 +1231,9 @@ extern "C" RustError::by_value permutations_evaluation(
 
         if (flag_c) {
             gpu.DtoH(value, value_device_ptrs, isize);
-            gpu.sync();
-
             CUDA_OK(cudaGetLastError());
-            gpu.sync();
-
-            MemoryPool::get_instance().~MemoryPool();
-            gpu.sync();
+            MemoryPool::get_instance().clear(gpu);
         }
-
-        CUDA_OK(cudaGetLastError());
-        gpu.sync();
 
     } catch (const cuda_error& e) {
         gpu.sync();
@@ -1408,17 +1392,6 @@ extern "C" RustError::by_value lookups_evaluation(
         fr_t* before_ntt_permuted_table_coset_device_ptrs =
             before_ntt_permuted_input_coset_device_ptrs + small_size;
 
-        gpu.HtoD(before_ntt_product_coset_device_ptrs, product_coset, small_size);
-        CUDA_OK(cudaGetLastError());
-
-        gpu.HtoD(before_ntt_permuted_input_coset_device_ptrs, permuted_input_coset,
-                 small_size);
-        CUDA_OK(cudaGetLastError());
-
-        gpu.HtoD(before_ntt_permuted_table_coset_device_ptrs, permuted_table_coset,
-                 small_size);
-        CUDA_OK(cudaGetLastError());
-
         fr_t* prev_device_ptrs; // nullptr
 
         size_t total_intermediate_size = calculations_count * csize;
@@ -1430,33 +1403,38 @@ extern "C" RustError::by_value lookups_evaluation(
         uint32_t log_isize = uint32_t(log2(isize));
         size_t grid_size_pad = (int)((isize + threads_per_block - 1) / threads_per_block);
 
-        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
+        gpu[0].HtoD(before_ntt_product_coset_device_ptrs, product_coset, small_size);
+        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[0]>>>(
             before_ntt_product_coset_device_ptrs, product_coset_device_ptrs, *g_coset,
             *g_coset_inv, small_size);
-        NTT::Base_dev_ptr(gpu, product_coset_device_ptrs, log_isize,
+        NTT::Base_dev_ptr(gpu[0], product_coset_device_ptrs, log_isize,
                           NTT::InputOutputOrder::NN, NTT::Direction::forward,
                           NTT::Type::standard);
 
-        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
+        gpu[1].HtoD(before_ntt_permuted_input_coset_device_ptrs, permuted_input_coset,
+                    small_size);
+        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[1]>>>(
             before_ntt_permuted_input_coset_device_ptrs, permuted_input_coset_device_ptrs,
             *g_coset, *g_coset_inv, small_size);
-        NTT::Base_dev_ptr(gpu, permuted_input_coset_device_ptrs, log_isize,
+        NTT::Base_dev_ptr(gpu[1], permuted_input_coset_device_ptrs, log_isize,
                           NTT::InputOutputOrder::NN, NTT::Direction::forward,
                           NTT::Type::standard);
 
-        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu>>>(
+        gpu[2].HtoD(before_ntt_permuted_table_coset_device_ptrs, permuted_table_coset,
+                    small_size);
+        zero_padding_kernel<<<grid_size_pad, threads_per_block, 0, gpu[2]>>>(
             before_ntt_permuted_table_coset_device_ptrs, permuted_table_coset_device_ptrs,
             *g_coset, *g_coset_inv, small_size);
-        NTT::Base_dev_ptr(gpu, permuted_table_coset_device_ptrs, log_isize,
+        NTT::Base_dev_ptr(gpu[2], permuted_table_coset_device_ptrs, log_isize,
                           NTT::InputOutputOrder::NN, NTT::Direction::forward,
                           NTT::Type::standard);
 
-        ///////////////////////////////////
+        gpu.sync();
+
         const fr_t zero_fr = fr_t{};
         auto const_at = [&](size_t idx, const fr_t* arr, size_t arr_len) -> fr_t {
             return (arr_len && idx < arr_len) ? arr[idx] : zero_fr;
         };
-        ///////////////////////////////////
 
         for (size_t outer = 0; outer < num_parts; outer++) {
             for (size_t i = 0; i < calculations_count; ++i) {
@@ -1729,12 +1707,11 @@ extern "C" RustError::by_value lookups_evaluation(
 
                         gpu_ptr_t<size_t> horner_index_values(
                             (size_t*)gpu.Dmalloc(horner_index.size() * sizeof(size_t)));
-                        gpu.sync();
+
                         size_t* horner_index_device_ptrs = &horner_index_values[0];
                         gpu.HtoD(horner_index_device_ptrs, horner_index.data(),
                                  horner_index.size());
                         CUDA_OK(cudaGetLastError());
-                        gpu.sync();
 
                         size_t horner_size = horner_index.size();
 
@@ -1751,10 +1728,6 @@ extern "C" RustError::by_value lookups_evaluation(
                                 csize);
                             CUDA_OK(cudaGetLastError());
                         }
-
-                        gpu.sync();
-                        CUDA_OK(cudaGetLastError());
-
                         break;
                     }
                     default:
@@ -1766,8 +1739,6 @@ extern "C" RustError::by_value lookups_evaluation(
             cudaMemcpyAsync(table_value_device_ptrs + offset_in,
                             intermediate_device_ptrs + ((calculations_count - 1) * csize),
                             csize * sizeof(fr_t), cudaMemcpyDeviceToDevice, gpu);
-
-            gpu.sync();
         }
 
         const int threads_per_block2 = 256;
@@ -1789,17 +1760,11 @@ extern "C" RustError::by_value lookups_evaluation(
             permuted_table_coset_device_ptrs, l0_device_ptrs, l_active_row_device_ptrs,
             *y, *beta, *gamma, rot_scale, isize);
         CUDA_OK(cudaGetLastError());
-        gpu.sync();
 
         if (flag_c) {
             gpu.DtoH(value, value_device_ptrs, isize);
-            gpu.sync();
-
             CUDA_OK(cudaGetLastError());
-            gpu.sync();
-
-            MemoryPool::get_instance().~MemoryPool();
-            gpu.sync();
+            MemoryPool::get_instance().clear(gpu);
         }
 
     } catch (const cuda_error& e) {

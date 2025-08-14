@@ -483,6 +483,8 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
             let g_coset_value = pk.vk.domain.g_coset;
             let g_coset_inv_value: F = g_coset_value.square(); 
 
+            let pk_cosets_ptr = extract_inner_ptrs_of_poly(&pk.permutation.cosets);  
+
             let small_sizex = advice[0].values.len() as i32;
 
             let sets = &permutation.sets;
@@ -491,20 +493,16 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
 
             crate::custom_gates_evaluation_r(&ffi_structs, &fixed_poly_ptr, &advice_poly_ptr, &instance_poly_ptr,
             challenges, &beta, &gamma, &theta, &y, &mut values.values, &self.custom_gates.constants, &rotation_rot, &rot_scale, &isize,
-            &l0.values, &l_last.values, &l_active_row.values, &g_coset_value, &g_coset_inv_value, &small_sizex, &round1_flag);
+            &l0.values, &l_last.values, &l_active_row.values, &g_coset_value, &g_coset_inv_value, &pk_cosets_ptr, &small_sizex, &round1_flag);
 
             // Permutations
-            
             if !sets.is_empty() {
                 let blinding_factors = pk.vk.cs.blinding_factors();
                 let last_rotation = Rotation(-((blinding_factors + 1) as i32));
                 let chunk_len = pk.vk.cs.degree() - 2;
                 let delta_start = beta * &pk.vk.domain.g_coset;
              
-                // Permutation constraints GPU SIDE
-                //let permutation_product_cosets_ptr = extract_inner_ptrs_of_poly(&permutation_product_cosets);
-                let permutation_product_poly = extract_inner_ptrs_of_set_poly(&sets);
-                let pk_cosets_ptr = extract_inner_ptrs_of_poly(&pk.permutation.cosets);                
+                let permutation_product_poly = extract_inner_ptrs_of_set_poly(&sets);              
                 let columns_ffi_structs: Vec<crate::ColumnFFI> = p.columns
                 .iter()
                 .map(|c| c.to_ffi())
@@ -513,8 +511,8 @@ impl<F: WithSmallOrderMulGroup<3>> Evaluator<F> {
                 let chunk_len32: i32 = chunk_len as i32;
                 let small_size = sets[0].permutation_product_poly.values.len() as i32;
 
-                crate::permutations_evaluation_r(&columns_ffi_structs, &permutation_product_poly, &pk_cosets_ptr, &advice_poly_ptr, &instance_poly_ptr, &fixed_poly_ptr,
-                    &mut values.values ,&l0.values, &l_last.values, &l_active_row.values,
+                crate::permutations_evaluation_r(&columns_ffi_structs, &permutation_product_poly,
+                    &mut values.values ,
                     &delta_start, &F::DELTA, &beta, &gamma, &y, &extended_omega, &chunk_len32, &last_rotation.0,
                     &rot_scale, &isize, &g_coset_value, &g_coset_inv_value, &small_size, &round2_flag);
             }
